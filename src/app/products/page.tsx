@@ -1,3 +1,5 @@
+"use client";
+
 import {
   Card,
   CardContent,
@@ -25,18 +27,23 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MoreHorizontal, PlusCircle } from "lucide-react";
 import Image from "next/image";
+import { parse, differenceInDays, isBefore, startOfToday } from 'date-fns';
 
 const products = [
-    { id: 'PROD001', name: "Vinho Tinto Suave", price: 30.00, stock: 8, status: 'Estoque Baixo', image: "https://placehold.co/40x40.png", hint: "wine bottle" },
-    { id: 'PROD002', name: "Cerveja Artesanal IPA", price: 15.00, stock: 40, status: 'Em Estoque', image: "https://placehold.co/40x40.png", hint: "beer bottle" },
-    { id: 'PROD003', name: "Whisky 12 Anos", price: 120.00, stock: 15, status: 'Em Estoque', image: "https://placehold.co/40x40.png", hint: "whiskey bottle" },
-    { id: 'PROD004', name: "Gin Importado", price: 130.00, stock: 12, status: 'Em Estoque', image: "https://placehold.co/40x40.png", hint: "gin bottle" },
-    { id: 'PROD005', name: "Água Tônica", price: 5.00, stock: 3, status: 'Crítico', image: "https://placehold.co/40x40.png", hint: "soda can" },
-    { id: 'PROD006', name: "Energético", price: 8.00, stock: 50, status: 'Em Estoque', image: "https://placehold.co/40x40.png", hint: "energy drink" },
-    { id: 'PROD007', name: "Saca-rolhas", price: 25.00, stock: 2, status: 'Crítico', image: "https://placehold.co/40x40.png", hint: "corkscrew" },
+    { id: 'PROD001', name: "Vinho Tinto Suave", price: 30.00, stock: 8, status: 'Estoque Baixo', image: "https://placehold.co/64x64.png", hint: "wine bottle", expiryDate: '15/12/2025' },
+    { id: 'PROD002', name: "Cerveja Artesanal IPA", price: 15.00, stock: 40, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "beer bottle", expiryDate: '20/08/2024' },
+    { id: 'PROD003', name: "Whisky 12 Anos", price: 120.00, stock: 15, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "whiskey bottle" },
+    { id: 'PROD004', name: "Gin Importado", price: 130.00, stock: 12, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "gin bottle" },
+    { id: 'PROD005', name: "Salgadinho de Queijo", price: 7.50, stock: 3, status: 'Crítico', image: "https://placehold.co/64x64.png", hint: "snack bag", expiryDate: '01/07/2024' },
+    { id: 'PROD006', name: "Energético", price: 8.00, stock: 50, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "energy drink", expiryDate: '30/07/2024' },
+    { id: 'PROD007', name: "Saca-rolhas", price: 25.00, stock: 2, status: 'Crítico', image: "https://placehold.co/64x64.png", hint: "corkscrew" },
+    { id: 'PROD008', name: "Maço de Cigarros", price: 12.00, stock: 100, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "cigarette pack" },
+    { id: 'PROD009', name: "Isqueiro", price: 4.00, stock: 30, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "lighter" },
 ];
 
-const getStatusBadgeVariant = (status: string) => {
+type BadgeVariant = "destructive" | "secondary" | "default" | "outline" | null | undefined;
+
+const getStatusBadgeVariant = (status: string): BadgeVariant => {
     switch (status) {
         case 'Em Estoque': return 'secondary';
         case 'Estoque Baixo': return 'default';
@@ -45,6 +52,32 @@ const getStatusBadgeVariant = (status: string) => {
     }
 }
 
+const getExpiryInfo = (expiryDate?: string): { text: string; variant: BadgeVariant } => {
+    if (!expiryDate) {
+        return { text: 'N/A', variant: 'secondary' };
+    }
+
+    try {
+        const date = parse(expiryDate, 'dd/MM/yyyy', new Date());
+        const today = startOfToday();
+
+        if (isBefore(date, today)) {
+            return { text: 'Vencido', variant: 'destructive' };
+        }
+
+        const daysUntilExpiry = differenceInDays(date, today);
+
+        if (daysUntilExpiry <= 30) {
+            return { text: 'Próximo', variant: 'default' };
+        }
+
+        return { text: 'OK', variant: 'secondary' };
+    } catch (e) {
+        return { text: 'Inválido', variant: 'destructive' };
+    }
+};
+
+
 export default function ProductsPage() {
   return (
     <Card>
@@ -52,7 +85,7 @@ export default function ProductsPage() {
         <div className="flex items-center justify-between">
           <div>
             <CardTitle className="font-headline">Catálogo de Produtos</CardTitle>
-            <CardDescription>Gerencie seus produtos e estoque.</CardDescription>
+            <CardDescription>Gerencie seus produtos, estoque e datas de validade.</CardDescription>
           </div>
           <Button>
             <PlusCircle className="mr-2 h-4 w-4" />
@@ -68,7 +101,8 @@ export default function ProductsPage() {
                 <span className="sr-only">Imagem</span>
               </TableHead>
               <TableHead>Nome</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead>Status Estoque</TableHead>
+              <TableHead>Vencimento</TableHead>
               <TableHead className="hidden md:table-cell">Preço</TableHead>
               <TableHead className="hidden md:table-cell">Estoque</TableHead>
               <TableHead>
@@ -77,43 +111,56 @@ export default function ProductsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {products.map(product => (
-                <TableRow key={product.id}>
-                    <TableCell className="hidden sm:table-cell">
-                        <Image
-                            alt={product.name}
-                            className="aspect-square rounded-md object-cover"
-                            height="64"
-                            src={product.image}
-                            width="64"
-                            data-ai-hint={product.hint}
-                        />
-                    </TableCell>
-                    <TableCell className="font-medium">{product.name}</TableCell>
-                    <TableCell>
-                        <Badge variant={getStatusBadgeVariant(product.status)}>{product.status}</Badge>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell">R$ {product.price.toFixed(2)}</TableCell>
-                    <TableCell className="hidden md:table-cell">{product.stock}</TableCell>
-                    <TableCell>
-                        <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button aria-haspopup="true" size="icon" variant="ghost">
-                            <MoreHorizontal className="h-4 w-4" />
-                            <span className="sr-only">Toggle menu</span>
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                            <DropdownMenuLabel>Ações</DropdownMenuLabel>
-                            <DropdownMenuItem>Editar</DropdownMenuItem>
-                            <DropdownMenuItem>Duplicar</DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive">Deletar</DropdownMenuItem>
-                        </DropdownMenuContent>
-                        </DropdownMenu>
-                    </TableCell>
-                </TableRow>
-            ))}
+            {products.map(product => {
+                const expiryInfo = getExpiryInfo(product.expiryDate);
+                return (
+                    <TableRow key={product.id}>
+                        <TableCell className="hidden sm:table-cell">
+                            <Image
+                                alt={product.name}
+                                className="aspect-square rounded-md object-cover"
+                                height="64"
+                                src={product.image}
+                                width="64"
+                                data-ai-hint={product.hint}
+                            />
+                        </TableCell>
+                        <TableCell className="font-medium">{product.name}</TableCell>
+                        <TableCell>
+                            <Badge variant={getStatusBadgeVariant(product.status)}>{product.status}</Badge>
+                        </TableCell>
+                        <TableCell>
+                           <div className="flex items-center gap-2">
+                                <span className={!product.expiryDate ? "text-muted-foreground" : "font-mono text-xs"}>
+                                    {product.expiryDate || 'N/A'}
+                                </span>
+                                {product.expiryDate && (
+                                    <Badge variant={expiryInfo.variant}>{expiryInfo.text}</Badge>
+                                )}
+                            </div>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">R$ {product.price.toFixed(2)}</TableCell>
+                        <TableCell className="hidden md:table-cell">{product.stock}</TableCell>
+                        <TableCell>
+                            <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button aria-haspopup="true" size="icon" variant="ghost">
+                                <MoreHorizontal className="h-4 w-4" />
+                                <span className="sr-only">Toggle menu</span>
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>Ações</DropdownMenuLabel>
+                                <DropdownMenuItem>Editar</DropdownMenuItem>
+                                <DropdownMenuItem>Duplicar</DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem className="text-destructive">Deletar</DropdownMenuItem>
+                            </DropdownMenuContent>
+                            </DropdownMenu>
+                        </TableCell>
+                    </TableRow>
+                )
+            })}
           </TableBody>
         </Table>
       </CardContent>

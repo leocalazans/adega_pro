@@ -9,6 +9,7 @@ export type Product = {
   stock: number;
   minStock: number;
   supplier?: Supplier;
+  expiryDate?: string;
 };
 
 export type Category = {

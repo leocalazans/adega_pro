@@ -12,35 +12,20 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import {
-  LayoutDashboard,
-  ShoppingCart,
-  Package,
-  FileText,
-  Users,
   Settings,
   Wine,
-  UsersRound,
-  TrendingDown,
-  Truck,
-  ClipboardList,
-  Landmark,
 } from "lucide-react";
+import { getNavItemsForRole } from "@/lib/nav-config";
 
-const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/pos", label: "Frente de Caixa", icon: ShoppingCart },
-  { href: "/products", label: "Produtos", icon: Package },
-  { href: "/restock", label: "Compras IA", icon: ClipboardList },
-  { href: "/reports", label: "Relatórios", icon: FileText },
-  { href: "/expenses", label: "Despesas", icon: TrendingDown },
-  { href: "/suppliers", label: "Fornecedores", icon: Truck },
-  { href: "/employees", label: "Funcionários", icon: UsersRound },
-  { href: "/contacts", label: "Clientes", icon: Users },
-  { href: "/cash-closing", label: "Fechamento de Caixa", icon: Landmark },
-];
+
+// In a real app, this would come from an authentication context.
+// Change to 'Caixa' to test the cashier view.
+const userRole: 'Admin' | 'Caixa' = 'Admin';
+
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const navItems = getNavItemsForRole(userRole);
 
   return (
     <Sidebar variant="sidebar" collapsible="icon" className="hidden lg:flex">
