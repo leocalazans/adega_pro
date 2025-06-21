@@ -16,18 +16,44 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import RestockSuggestionModal from "@/components/restock/restock-suggestion-modal";
+import { getProducts } from "@/lib/data";
+import type { Product } from "@/lib/types";
 
-// Esta lista é um exemplo. Em um app real, seria derivada da lista de produtos,
-// filtrando por aqueles que precisam de atenção.
-const productsToRestock = [
-  { id: 'PROD005', name: "Água Tônica", stock: 3, minStock: 20, recentSales: "Vendas na última semana: 45 unidades.", progress: 15, status: "Crítico" },
-  { id: 'PROD007', name: "Saca-rolhas", stock: 2, minStock: 5, recentSales: "Vendas na última semana: 1 unidade.", progress: 40, status: "Crítico" },
-  { id: 'PROD001', name: "Vinho Tinto Suave", stock: 8, minStock: 10, recentSales: "Vendas na última semana: 15 unidades.", progress: 80, status: "Baixo" },
-  { id: 'PROD008', name: "Cerveja Pilsen Pack 6", stock: 11, minStock: 15, recentSales: "Vendas na última semana: 22 unidades.", progress: 73, status: "Baixo" },
-  { id: 'PROD002', name: "Cerveja Artesanal IPA", stock: 40, minStock: 25, recentSales: "Vendas na última semana: 18 unidades.", progress: 160, status: "OK" },
-];
+// Em um app real, os dados de vendas recentes viriam do banco de dados.
+// Aqui estamos adicionando um mock para a demonstração.
+const recentSalesData: Record<string, string> = {
+  'PROD005': "Vendas na última semana: 45 unidades.",
+  'PROD007': "Vendas na última semana: 1 unidade.",
+  'PROD001': "Vendas na última semana: 15 unidades.",
+  'PROD008': "Vendas na última semana: 22 unidades.",
+  'PROD002': "Vendas na última semana: 18 unidades.",
+};
 
-export default function RestockPage() {
+type ProductToRestock = Product & {
+  recentSales: string;
+  progress: number;
+  status: 'Crítico' | 'Baixo' | 'OK';
+}
+
+export default async function RestockPage() {
+  const allProducts = await getProducts();
+  
+  const productsToRestock: ProductToRestock[] = allProducts
+    .map(p => {
+      const stockPercentage = (p.stock / p.minStock) * 100;
+      let status: ProductToRestock['status'] = 'OK';
+      if (stockPercentage < 100) status = 'Baixo';
+      if (stockPercentage < 50) status = 'Crítico';
+
+      return {
+        ...p,
+        recentSales: recentSalesData[p.id] || "Sem dados de vendas recentes.",
+        progress: stockPercentage,
+        status,
+      }
+    })
+    .sort((a, b) => a.progress - b.progress); // Sort by lowest stock first
+
   return (
     <Card>
       <CardHeader>

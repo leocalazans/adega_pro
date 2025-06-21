@@ -1,5 +1,3 @@
-"use client";
-
 import {
   Card,
   CardContent,
@@ -28,30 +26,15 @@ import { Button } from "@/components/ui/button";
 import { MoreHorizontal, PlusCircle } from "lucide-react";
 import Image from "next/image";
 import { parse, differenceInDays, isBefore, startOfToday } from 'date-fns';
-
-const products = [
-    { id: 'PROD001', name: "Vinho Tinto Suave", price: 30.00, stock: 8, minStock: 10, status: 'Estoque Baixo', image: "https://placehold.co/64x64.png", hint: "wine bottle", expiryDate: '15/12/2025' },
-    { id: 'PROD002', name: "Cerveja Artesanal IPA", price: 15.00, stock: 40, minStock: 25, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "beer bottle", expiryDate: '20/08/2024' },
-    { id: 'PROD003', name: "Whisky 12 Anos", price: 120.00, stock: 15, minStock: 5, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "whiskey bottle" },
-    { id: 'PROD004', name: "Gin Importado", price: 130.00, stock: 12, minStock: 10, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "gin bottle" },
-    { id: 'PROD005', name: "Água Tônica", price: 5.00, stock: 3, minStock: 20, status: 'Crítico', image: "https://placehold.co/64x64.png", hint: "soda can", expiryDate: '30/08/2024' },
-    { id: 'PROD006', name: "Energético", price: 8.00, stock: 50, minStock: 20, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "energy drink", expiryDate: '30/07/2024' },
-    { id: 'PROD007', name: "Saca-rolhas", price: 25.00, stock: 2, minStock: 5, status: 'Crítico', image: "https://placehold.co/64x64.png", hint: "corkscrew" },
-    { id: 'PROD008', name: "Cerveja Pilsen Pack 6", price: 22.00, stock: 11, minStock: 15, status: 'Estoque Baixo', image: "https://placehold.co/64x64.png", hint: "beer pack" },
-    { id: 'PROD009', name: "Salgadinho de Queijo", price: 7.50, stock: 25, minStock: 15, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "snack bag", expiryDate: '01/07/2024' },
-    { id: 'PROD010', name: "Maço de Cigarros", price: 12.00, stock: 100, minStock: 30, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "cigarette pack" },
-    { id: 'PROD011', name: "Isqueiro", price: 4.00, stock: 30, minStock: 10, status: 'Em Estoque', image: "https://placehold.co/64x64.png", hint: "lighter" },
-];
+import { getProducts } from "@/lib/data";
 
 type BadgeVariant = "destructive" | "secondary" | "default" | "outline" | null | undefined;
 
-const getStatusBadgeVariant = (status: string): BadgeVariant => {
-    switch (status) {
-        case 'Em Estoque': return 'secondary';
-        case 'Estoque Baixo': return 'default';
-        case 'Crítico': return 'destructive';
-        default: return 'outline';
-    }
+const getStatusBadgeVariant = (stock: number, minStock: number): {variant: BadgeVariant, text: string} => {
+    if (stock <= 0) return { variant: 'destructive', text: 'Sem Estoque' };
+    if (stock < minStock) return { variant: 'destructive', text: 'Crítico' };
+    if (stock < minStock * 1.2) return { variant: 'default', text: 'Estoque Baixo' };
+    return { variant: 'secondary', text: 'Em Estoque' };
 }
 
 const getExpiryInfo = (expiryDate?: string): { text: string; variant: BadgeVariant } => {
@@ -79,8 +62,9 @@ const getExpiryInfo = (expiryDate?: string): { text: string; variant: BadgeVaria
     }
 };
 
+export default async function ProductsPage() {
+  const products = await getProducts();
 
-export default function ProductsPage() {
   return (
     <Card>
       <CardHeader>
@@ -115,6 +99,7 @@ export default function ProductsPage() {
           <TableBody>
             {products.map(product => {
                 const expiryInfo = getExpiryInfo(product.expiryDate);
+                const stockStatus = getStatusBadgeVariant(product.stock, product.minStock);
                 return (
                     <TableRow key={product.id}>
                         <TableCell className="hidden sm:table-cell">
@@ -129,7 +114,7 @@ export default function ProductsPage() {
                         </TableCell>
                         <TableCell className="font-medium">{product.name}</TableCell>
                         <TableCell>
-                            <Badge variant={getStatusBadgeVariant(product.status)}>{product.status}</Badge>
+                            <Badge variant={stockStatus.variant}>{stockStatus.text}</Badge>
                         </TableCell>
                         <TableCell>
                            <div className="flex items-center gap-2">

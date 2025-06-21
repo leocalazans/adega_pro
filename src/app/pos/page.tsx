@@ -5,27 +5,17 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, PlusCircle, MinusCircle, Trash2, Camera, ShoppingCart, CreditCard, DollarSign, Wallet, Smartphone } from "lucide-react";
+import { Search, PlusCircle, MinusCircle, Trash2, Camera, ShoppingCart, CreditCard, DollarSign, Wallet, Smartphone, Loader2 } from "lucide-react";
 import Image from "next/image";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
+import { getProducts } from '@/lib/data';
+import type { Product } from '@/lib/types';
+import { Skeleton } from '@/components/ui/skeleton';
 
-// In a real app, this would come from an API
-const productCatalog = [
-    { id: 1, name: "Vinho Tinto Suave", price: 30.00, stock: 15, image: "https://placehold.co/150x150.png", hint: "wine bottle", barcode: "78900001" },
-    { id: 2, name: "Cerveja Artesanal IPA", price: 15.00, stock: 40, image: "https://placehold.co/150x150.png", hint: "beer bottle", barcode: "78900002" },
-    { id: 3, name: "Whisky 12 Anos", price: 120.00, stock: 8, image: "https://placehold.co/150x150.png", hint: "whiskey bottle", barcode: "78900003" },
-    { id: 4, name: "Gin Importado", price: 130.00, stock: 12, image: "https://placehold.co/150x150.png", hint: "gin bottle", barcode: "78900004" },
-    { id: 5, name: "Água Tônica", price: 5.00, stock: 50, image: "https://placehold.co/150x150.png", hint: "soda can", barcode: "78900005" },
-    { id: 6, name: "Energético", price: 8.00, stock: 35, image: "https://placehold.co/150x150.png", hint: "energy drink", barcode: "78900006" },
-    { id: 7, name: "Saca-rolhas", price: 25.00, stock: 10, image: "https://placehold.co/150x150.png", hint: "corkscrew", barcode: "78900007" },
-    { id: 8, name: "Cerveja Pilsen Pack 6", price: 22.00, stock: 25, image: "https://placehold.co/150x150.png", hint: "beer pack", barcode: "78900008" },
-];
-
-type Product = typeof productCatalog[0];
 type CartItem = Product & { quantity: number };
 
 export default function PosPage() {
@@ -37,9 +27,31 @@ export default function PosPage() {
     const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
     const [paymentMethod, setPaymentMethod] = useState("credit_card");
     const [amountPaid, setAmountPaid] = useState("");
+    
+    const [productCatalog, setProductCatalog] = useState<Product[]>([]);
+    const [isLoadingProducts, setIsLoadingProducts] = useState(true);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        const fetchProducts = async () => {
+            setIsLoadingProducts(true);
+            try {
+                const products = await getProducts();
+                setProductCatalog(products);
+            } catch (error) {
+                toast({
+                    variant: "destructive",
+                    title: "Erro ao carregar produtos",
+                    description: "Não foi possível buscar o catálogo de produtos.",
+                });
+            } finally {
+                setIsLoadingProducts(false);
+            }
+        };
+        fetchProducts();
+    }, [toast]);
 
     const handleAddToCart = useCallback((product: Product) => {
         setCartItems(prevItems => {
@@ -54,18 +66,20 @@ export default function PosPage() {
     }, []);
 
     const handleUpdateQuantity = (productId: number, newQuantity: number) => {
+        // In this mock, product ids are strings, so we need to adjust
+        const pId = String(productId);
         if (newQuantity <= 0) {
-            handleRemoveFromCart(productId);
+            handleRemoveFromCart(pId);
         } else {
             setCartItems(prevItems =>
                 prevItems.map(item =>
-                    item.id === productId ? { ...item, quantity: newQuantity } : item
+                    item.id === pId ? { ...item, quantity: newQuantity } : item
                 )
             );
         }
     };
     
-    const handleRemoveFromCart = (productId: number) => {
+    const handleRemoveFromCart = (productId: string) => {
         setCartItems(prevItems => prevItems.filter(item => item.id !== productId));
     };
 
@@ -195,6 +209,7 @@ export default function PosPage() {
     }, [handleFinalizeSale, isCameraOpen, isPaymentDialogOpen]);
 
       const simulateScan = () => {
+        if(productCatalog.length === 0) return;
         const randomProduct = productCatalog[Math.floor(Math.random() * productCatalog.length)];
         handleAddToCart(randomProduct);
         setIsCameraOpen(false);
@@ -228,9 +243,9 @@ export default function PosPage() {
                                     <p className="text-xs text-muted-foreground">R$ {item.price.toFixed(2)}</p>
                                 </div>
                                 <div className="flex items-center gap-1">
-                                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleUpdateQuantity(item.id, item.quantity - 1)}><MinusCircle className="h-4 w-4" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleUpdateQuantity(parseInt(item.id.replace('PROD', '')), item.quantity - 1)}><MinusCircle className="h-4 w-4" /></Button>
                                     <span className="w-6 text-center text-sm">{item.quantity}</span>
-                                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleUpdateQuantity(item.id, item.quantity + 1)}><PlusCircle className="h-4 w-4" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleUpdateQuantity(parseInt(item.id.replace('PROD', '')), item.quantity + 1)}><PlusCircle className="h-4 w-4" /></Button>
                                     <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive/80 hover:text-destructive" onClick={() => handleRemoveFromCart(item.id)}><Trash2 className="h-4 w-4" /></Button>
                                 </div>
                             </div>
@@ -252,7 +267,7 @@ export default function PosPage() {
                                 <span>R$ {total.toFixed(2)}</span>
                             </div>
                         </div>
-                        <Button size="lg" className="w-full font-bold" onClick={handleFinalizeSale}>Finalizar Venda</Button>
+                        <Button size="lg" className="w-full font-bold" onClick={handleFinalizeSale} disabled={cartItems.length === 0}>Finalizar Venda</Button>
                     </CardFooter>
                 </Card>
             </div>
@@ -310,25 +325,36 @@ export default function PosPage() {
                     </CardHeader>
                     <CardContent className="p-4 flex-1 overflow-y-auto">
                          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                            {filteredProducts.map(product => (
-                                <Card key={product.id} className="group cursor-pointer overflow-hidden transition-all hover:shadow-lg hover:-translate-y-1" onClick={() => handleAddToCart(product)}>
-                                    <CardContent className="flex flex-col items-center p-2 text-center">
-                                        <div className="relative w-full aspect-square">
-                                            <Image src={product.image} alt={product.name} fill className="rounded-md object-cover" data-ai-hint={product.hint} />
-                                        </div>
-                                        <p className="mt-2 text-xs font-medium h-8 flex items-center justify-center">{product.name}</p>
-                                        <p className="text-sm font-bold text-primary">R$ {product.price.toFixed(2)}</p>
-                                    </CardContent>
-                                </Card>
-                            ))}
+                            {isLoadingProducts ? (
+                                Array.from({ length: 10 }).map((_, i) => (
+                                    <Card key={i}>
+                                        <CardContent className="flex flex-col items-center p-2 text-center">
+                                            <Skeleton className="w-full aspect-square rounded-md" />
+                                            <Skeleton className="mt-2 h-8 w-3/4" />
+                                            <Skeleton className="h-6 w-1/2" />
+                                        </CardContent>
+                                    </Card>
+                                ))
+                            ) : filteredProducts.length > 0 ? (
+                                filteredProducts.map(product => (
+                                    <Card key={product.id} className="group cursor-pointer overflow-hidden transition-all hover:shadow-lg hover:-translate-y-1" onClick={() => handleAddToCart(product)}>
+                                        <CardContent className="flex flex-col items-center p-2 text-center">
+                                            <div className="relative w-full aspect-square">
+                                                <Image src={product.image} alt={product.name} fill className="rounded-md object-cover" data-ai-hint={product.hint} />
+                                            </div>
+                                            <p className="mt-2 text-xs font-medium h-8 flex items-center justify-center">{product.name}</p>
+                                            <p className="text-sm font-bold text-primary">R$ {product.price.toFixed(2)}</p>
+                                        </CardContent>
+                                    </Card>
+                                ))
+                            ) : (
+                                <div className="col-span-full flex flex-col items-center justify-center h-full text-center text-muted-foreground">
+                                    <Search className="h-12 w-12 mb-4" />
+                                    <p className="font-semibold">Nenhum produto encontrado</p>
+                                    <p className="text-xs">Tente um termo de busca diferente.</p>
+                                </div>
+                            )}
                         </div>
-                        {filteredProducts.length === 0 && (
-                            <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground">
-                               <Search className="h-12 w-12 mb-4" />
-                               <p className="font-semibold">Nenhum produto encontrado</p>
-                               <p className="text-xs">Tente um termo de busca diferente.</p>
-                           </div>
-                        )}
                     </CardContent>
                     <CardFooter className="p-3 border-t">
                         <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">

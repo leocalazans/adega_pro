@@ -24,57 +24,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MoreHorizontal, PlusCircle, CheckCircle, Clock } from "lucide-react";
-
-const expenses = [
-  {
-    id: 'EXP001',
-    description: 'Pagamento de Salário - Ana Silva',
-    category: 'Folha de Pagamento',
-    amount: 1800.00,
-    dueDate: '05/07/2024',
-    status: 'Pago',
-  },
-  {
-    id: 'EXP002',
-    description: 'Conta de Energia Elétrica',
-    category: 'Contas Fixas',
-    amount: 450.75,
-    dueDate: '10/07/2024',
-    status: 'Pendente',
-  },
-  {
-    id: 'EXP003',
-    description: 'Aluguel do Ponto Comercial',
-    category: 'Aluguel',
-    amount: 3500.00,
-    dueDate: '08/07/2024',
-    status: 'Pendente',
-  },
-  {
-    id: 'EXP004',
-    description: 'Compra de Estoque - Bebidas ABC',
-    category: 'Fornecedores',
-    amount: 1200.00,
-    dueDate: '28/06/2024',
-    status: 'Pago',
-  },
-  {
-    id: 'EXP005',
-    description: 'Conta de Água',
-    category: 'Contas Fixas',
-    amount: 150.20,
-    dueDate: '12/07/2024',
-    status: 'Pendente',
-  },
-  {
-    id: 'EXP006',
-    description: 'Serviço de Contabilidade',
-    category: 'Serviços',
-    amount: 600.00,
-    dueDate: '15/07/2024',
-    status: 'Pendente',
-  },
-];
+import { getExpenses } from "@/lib/data";
 
 const getStatusBadgeVariant = (status: string) => {
     return status === 'Pago' ? 'secondary' : 'destructive';
@@ -91,7 +41,13 @@ const getCategoryBadgeVariant = (category: string) => {
     }
 }
 
-export default function ExpensesPage() {
+export default async function ExpensesPage() {
+  const expenses = await getExpenses();
+
+  const totalExpenses = expenses.reduce((acc, expense) => acc + expense.amount, 0);
+  const pendingExpenses = expenses.filter(e => e.status === 'Pendente');
+  const totalPendingAmount = pendingExpenses.reduce((acc, expense) => acc + expense.amount, 0);
+
   return (
     <div className="space-y-8">
        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -101,7 +57,7 @@ export default function ExpensesPage() {
             <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">R$ 7.700,95</div>
+            <div className="text-2xl font-bold">R$ {totalExpenses.toFixed(2)}</div>
             <p className="text-xs text-muted-foreground">+2.5% vs mês passado</p>
           </CardContent>
         </Card>
@@ -111,8 +67,8 @@ export default function ExpensesPage() {
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">R$ 4.700,95</div>
-            <p className="text-xs text-muted-foreground">4 despesas a vencer</p>
+            <div className="text-2xl font-bold">R$ {totalPendingAmount.toFixed(2)}</div>
+            <p className="text-xs text-muted-foreground">{pendingExpenses.length} despesas a vencer</p>
           </CardContent>
         </Card>
       </div>

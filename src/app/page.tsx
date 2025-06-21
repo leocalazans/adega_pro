@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { DollarSign, Package, ShoppingCart, UserPlus } from "lucide-react";
 import SalesChart from "@/components/dashboard/sales-chart";
+import { getProducts } from "@/lib/data";
 
 const stats = [
   {
@@ -37,34 +38,41 @@ const stats = [
     change: "+2 vs ontem",
     icon: UserPlus,
   },
-  {
-    title: "Estoque Baixo",
-    value: "12 Itens",
-    change: "3 precisam de atenção",
-    icon: Package,
-  },
 ];
 
-const topProducts = [
-  { name: "Vinho Tinto Suave", sales: 120, revenue: "R$ 3,600.00" },
-  { name: "Cerveja Artesanal IPA", sales: 98, revenue: "R$ 1,470.00" },
-  { name: "Whisky 12 Anos", sales: 45, revenue: "R$ 5,400.00" },
-  { name: "Gin Importado", sales: 32, revenue: "R$ 4,160.00" },
-  { name: "Água Tônica", sales: 210, revenue: "R$ 1,050.00" },
+const topProductsMock = [
+  { id: "PROD001", revenue: 3600.00 },
+  { id: "PROD002", revenue: 1470.00 },
+  { id: "PROD003", revenue: 5400.00 },
+  { id: "PROD004", revenue: 4160.00 },
+  { id: "PROD005", revenue: 1050.00 },
 ];
 
-const lowStockProducts = [
-  { name: "Vinho Tinto Suave", stock: 8, minStock: 10, progress: 80 },
-  { name: "Energético", stock: 5, minStock: 12, progress: 41 },
-  { name: "Saca-rolhas", stock: 3, minStock: 5, progress: 60 },
-  { name: "Cerveja Pilsen Pack 6", stock: 11, minStock: 15, progress: 73 },
-];
+export default async function DashboardPage() {
+  const allProducts = await getProducts();
 
-export default function DashboardPage() {
+  const lowStockProducts = allProducts
+    .filter(p => p.stock < p.minStock * 1.2)
+    .sort((a,b) => (a.stock/a.minStock) - (b.stock/b.minStock))
+    .slice(0, 5);
+  
+  const topProducts = topProductsMock.map(mock => {
+    const product = allProducts.find(p => p.id === mock.id);
+    return {
+      name: product?.name || 'Produto não encontrado',
+      revenue: `R$ ${mock.revenue.toFixed(2)}`,
+    }
+  });
+
   return (
     <div className="flex flex-col gap-8">
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat, index) => (
+        {[...stats, {
+            title: "Estoque Baixo",
+            value: `${lowStockProducts.length} Itens`,
+            change: `${lowStockProducts.filter(p => p.stock < p.minStock).length} em estado crítico`,
+            icon: Package,
+        }].map((stat, index) => (
           <Card key={index}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">{stat.title}</CardTitle>
@@ -136,7 +144,7 @@ export default function DashboardPage() {
                   <TableCell className="font-medium">{product.name}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <Progress value={product.progress} className="h-2 w-24" />
+                      <Progress value={(product.stock / product.minStock) * 100} className="h-2 w-24" />
                       <Badge variant={product.stock < product.minStock ? "destructive" : "secondary"}>
                         {product.stock < product.minStock ? "Crítico" : "Atenção"}
                       </Badge>

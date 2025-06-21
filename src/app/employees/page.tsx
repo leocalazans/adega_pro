@@ -25,14 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MoreHorizontal, PlusCircle, UserCheck, UserX } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-
-const employees = [
-  { id: 'EMP01', name: 'Ana Silva', role: 'Caixa', status: 'Ativo', avatar: 'https://placehold.co/40x40.png', hint: 'woman avatar' },
-  { id: 'EMP02', name: 'Bruno Costa', role: 'Gerente', status: 'Ativo', avatar: 'https://placehold.co/40x40.png', hint: 'man avatar' },
-  { id: 'EMP03', name: 'Carlos Dias', role: 'Caixa', status: 'Inativo', avatar: 'https://placehold.co/40x40.png', hint: 'man portrait' },
-  { id: 'EMP04', name: 'Daniela Souza', role: 'Estoquista', status: 'Ativo', avatar: 'https://placehold.co/40x40.png', hint: 'woman portrait' },
-  { id: 'EMP05', name: 'Eduardo Lima', role: 'Caixa', status: 'Ativo', avatar: 'https://placehold.co/40x40.png', hint: 'male avatar' },
-];
+import { getEmployees } from "@/lib/data";
 
 const getStatusBadgeVariant = (status: string) => {
     return status === 'Ativo' ? 'secondary' : 'destructive';
@@ -47,7 +40,9 @@ const getRoleBadgeVariant = (role: string) => {
     }
 }
 
-export default function EmployeesPage() {
+export default async function EmployeesPage() {
+  const employees = await getEmployees();
+  
   return (
     <Card>
       <CardHeader>

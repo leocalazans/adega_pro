@@ -1,35 +1,82 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { CreditCard, DollarSign, Smartphone } from "lucide-react";
-
-// Mock data, in a real app this would come from a database based on the logged-in user and sales records
-const shiftSummary = {
-  employees: [
-    { id: 'EMP01', name: 'Ana Silva' },
-    { id: 'EMP03', name: 'Carlos Dias' },
-    { id: 'EMP05', name: 'Eduardo Lima' },
-  ],
-  sales: {
-    cash: 750.50,
-    card: 1230.00,
-    pix: 450.75,
-    total: 2431.25,
-  },
-  cashDrawer: {
-    initial: 200.00,
-  }
-};
+import { CreditCard, DollarSign, Smartphone, Loader2 } from "lucide-react";
+import { getShiftSummary } from '@/lib/data';
+import type { ShiftSummary } from '@/lib/types';
+import { Skeleton } from '@/components/ui/skeleton';
 
 export default function CashClosingPage() {
+    const [shiftSummary, setShiftSummary] = useState<ShiftSummary | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
     const [countedAmount, setCountedAmount] = useState('');
     const [selectedEmployee, setSelectedEmployee] = useState('');
+
+    useEffect(() => {
+        const fetchSummary = async () => {
+            setIsLoading(true);
+            const summary = await getShiftSummary();
+            setShiftSummary(summary);
+            setIsLoading(false);
+        };
+        fetchSummary();
+    }, []);
+
+    if (isLoading || !shiftSummary) {
+        return (
+            <div className="grid gap-8 md:grid-cols-3">
+                <div className="md:col-span-2">
+                    <Card>
+                        <CardHeader>
+                            <Skeleton className="h-8 w-3/4" />
+                            <Skeleton className="h-4 w-1/2" />
+                        </CardHeader>
+                        <CardContent className="space-y-6">
+                            <Skeleton className="h-10 w-[300px]" />
+                            <Card>
+                                <CardHeader>
+                                    <Skeleton className="h-6 w-1/2" />
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <Skeleton className="h-8 w-full" />
+                                    <Skeleton className="h-8 w-full" />
+                                    <Skeleton className="h-8 w-full" />
+                                </CardContent>
+                            </Card>
+                        </CardContent>
+                    </Card>
+                </div>
+                <div className="md:col-span-1">
+                    <Card>
+                        <CardHeader>
+                             <Skeleton className="h-6 w-3/4" />
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <Skeleton className="h-6 w-full" />
+                            <Skeleton className="h-6 w-full" />
+                            <Separator />
+                            <Skeleton className="h-8 w-full" />
+                            <Separator />
+                             <div className="space-y-2">
+                                <Skeleton className="h-4 w-1/3" />
+                                <Skeleton className="h-10 w-full" />
+                            </div>
+                             <Skeleton className="h-8 w-full" />
+                        </CardContent>
+                        <CardFooter>
+                            <Skeleton className="h-10 w-full" />
+                        </CardFooter>
+                    </Card>
+                </div>
+            </div>
+        )
+    }
 
     const initialCash = shiftSummary.cashDrawer.initial;
     const cashSales = shiftSummary.sales.cash;
