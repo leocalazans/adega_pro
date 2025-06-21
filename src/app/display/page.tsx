@@ -57,6 +57,9 @@ export default function DisplayPage() {
   const handleUserInteraction = () => {
       if (!isInteracted) {
           setIsInteracted(true);
+          if (audioRef.current) {
+            audioRef.current.play().catch(e => console.error("Audio play failed on interaction:", e));
+          }
       }
   }
   
@@ -105,11 +108,12 @@ export default function DisplayPage() {
         <video
           key="bg-video"
           className="absolute top-0 left-0 w-full h-full object-cover animate-fade-in"
-          src={VIDEO_URL}
           autoPlay
           loop
           muted
-        />
+        >
+          <source src={VIDEO_URL} type="video/mp4" />
+        </video>
       )}
 
       {viewMode === 'promotions' && currentPromotion && (
@@ -141,7 +145,9 @@ export default function DisplayPage() {
         </div>
       )}
 
-      <audio ref={audioRef} src={MUSIC_URL} loop />
+      <audio ref={audioRef} loop>
+        <source src={MUSIC_URL} type="audio/mpeg" />
+      </audio>
 
       <div className="absolute bottom-4 right-4 z-30 flex gap-3">
          <Button onClick={toggleViewMode} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
