@@ -17,10 +17,12 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import RestockSuggestionModal from "@/components/restock/restock-suggestion-modal";
 
-const lowStockProducts = [
-  { id: 'PROD001', name: "Vinho Tinto Suave", stock: 8, minStock: 10, recentSales: "Vendas na última semana: 15 unidades.", progress: 80, status: "Baixo" },
+// Esta lista é um exemplo. Em um app real, seria derivada da lista de produtos,
+// filtrando por aqueles que precisam de atenção.
+const productsToRestock = [
   { id: 'PROD005', name: "Água Tônica", stock: 3, minStock: 20, recentSales: "Vendas na última semana: 45 unidades.", progress: 15, status: "Crítico" },
   { id: 'PROD007', name: "Saca-rolhas", stock: 2, minStock: 5, recentSales: "Vendas na última semana: 1 unidade.", progress: 40, status: "Crítico" },
+  { id: 'PROD001', name: "Vinho Tinto Suave", stock: 8, minStock: 10, recentSales: "Vendas na última semana: 15 unidades.", progress: 80, status: "Baixo" },
   { id: 'PROD008', name: "Cerveja Pilsen Pack 6", stock: 11, minStock: 15, recentSales: "Vendas na última semana: 22 unidades.", progress: 73, status: "Baixo" },
   { id: 'PROD002', name: "Cerveja Artesanal IPA", stock: 40, minStock: 25, recentSales: "Vendas na última semana: 18 unidades.", progress: 160, status: "OK" },
 ];
@@ -29,10 +31,10 @@ export default function RestockPage() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="font-headline">Reposição Inteligente</CardTitle>
+        <CardTitle className="font-headline">Reposição Inteligente de Estoque</CardTitle>
         <CardDescription>
-          Use IA para obter sugestões de compra baseadas em dados de vendas e
-          evitar falta de produtos.
+          Analise quais produtos precisam de reposição e use a IA para obter
+          sugestões de compra inteligentes, evitando perdas e garantindo que você nunca deixe de vender.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -46,12 +48,12 @@ export default function RestockPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {lowStockProducts.map((product) => (
+            {productsToRestock.map((product) => (
               <TableRow key={product.id}>
                 <TableCell className="font-medium">{product.name}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
-                    <Progress value={product.progress} className="h-2 w-24" />
+                    <Progress value={product.progress > 100 ? 100 : product.progress} className="h-2 w-24" />
                     <Badge variant={product.status === "Crítico" ? "destructive" : product.status === "Baixo" ? "default" : "secondary"}>
                       {product.status}
                     </Badge>
