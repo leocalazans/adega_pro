@@ -7,7 +7,6 @@ import type { Promotion } from '@/lib/types';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Volume2, VolumeX, MonitorPlay, Image as ImageIcon } from 'lucide-react';
-import { cn } from '@/lib/utils';
 
 const PROMOTION_INTERVAL = 8000; // 8 seconds
 const MUSIC_URL = "https://cdn.pixabay.com/download/audio/2022/08/04/audio_2d891b22e1.mp3"; // Royalty-free Lofi
@@ -19,8 +18,10 @@ export default function DisplayPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'promotions' | 'video'>('promotions');
   const [isMuted, setIsMuted] = useState(true);
-  const [isInteracted, setIsInteracted] = useState(false);
+  const [hasInteracted, setHasInteracted] = useState(false);
+
   const audioRef = useRef<HTMLAudioElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const fetchPromos = async () => {
@@ -45,33 +46,28 @@ export default function DisplayPage() {
     }
   }, [promotions]);
   
+  // Sync the muted state of the audio element with our React state
   useEffect(() => {
       if (audioRef.current) {
           audioRef.current.muted = isMuted;
-          if(!isMuted && isInteracted) {
-            audioRef.current.play().catch(e => console.error("Audio play failed:", e));
-          }
       }
-  }, [isMuted, isInteracted]);
+  }, [isMuted]);
   
-  const handleUserInteraction = () => {
-      if (!isInteracted) {
-          setIsInteracted(true);
-          if (audioRef.current) {
-            audioRef.current.play().catch(e => console.error("Audio play failed on interaction:", e));
-          }
-      }
-  }
-  
-  const toggleMute = () => {
-      handleUserInteraction();
-      setIsMuted(prev => !prev);
-  }
+  // This effect runs once after the first user interaction
+  useEffect(() => {
+    // Programmatically play media once the user has interacted with the page
+    // to comply with browser autoplay policies.
+    if (hasInteracted) {
+      videoRef.current?.play().catch(e => console.error("Video play failed:", e));
+      audioRef.current?.play().catch(e => console.error("Audio play failed:", e));
+    }
+  }, [hasInteracted]);
 
-  const toggleViewMode = () => {
-      handleUserInteraction();
-      setViewMode(prev => prev === 'promotions' ? 'video' : 'promotions');
-  }
+  const handleInitialInteraction = () => {
+    if (!hasInteracted) {
+        setHasInteracted(true);
+    }
+  };
   
   if (isLoading) {
     return (
@@ -84,7 +80,8 @@ export default function DisplayPage() {
   const currentPromotion = promotions[currentPromotionIndex];
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-black text-white font-sans" onClick={handleUserInteraction}>
+    // Any click on the screen will count as the first interaction
+    <div className="relative h-screen w-screen overflow-hidden bg-black text-white font-sans" onClick={handleInitialInteraction}>
       <style jsx global>{`
         .font-anton { font-family: 'Anton', sans-serif; }
         .font-poppins { font-family: 'Poppins', sans-serif; }
@@ -106,11 +103,12 @@ export default function DisplayPage() {
 
       {viewMode === 'video' && (
         <video
+          ref={videoRef}
           key="bg-video"
           className="absolute top-0 left-0 w-full h-full object-cover animate-fade-in"
-          autoPlay
           loop
-          muted
+          muted // The video is always muted, only the background audio has sound control
+          playsInline // Important for iOS
         >
           <source src={VIDEO_URL} type="video/mp4" />
         </video>
@@ -150,10 +148,10 @@ export default function DisplayPage() {
       </audio>
 
       <div className="absolute bottom-4 right-4 z-30 flex gap-3">
-         <Button onClick={toggleViewMode} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
+         <Button onClick={() => setViewMode(prev => prev === 'promotions' ? 'video' : 'promotions')} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
             {viewMode === 'promotions' ? <MonitorPlay /> : <ImageIcon />}
          </Button>
-         <Button onClick={toggleMute} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
+         <Button onClick={() => setIsMuted(prev => !prev)} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
             {isMuted ? <VolumeX /> : <Volume2 />}
          </Button>
       </div>
