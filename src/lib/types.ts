@@ -55,3 +55,12 @@ export type Supplier = {
   name: string;
   contactInfo?: string;
 };
+
+export type Promotion = {
+  id: string;
+  productName: string;
+  price: string;
+  image: string;
+  hint: string;
+  highlight?: string;
+};

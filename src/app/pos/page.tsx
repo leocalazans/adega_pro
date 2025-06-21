@@ -5,7 +5,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, PlusCircle, MinusCircle, Trash2, Camera, ShoppingCart, CreditCard, DollarSign, Wallet, Smartphone, Loader2 } from "lucide-react";
+import { Search, PlusCircle, MinusCircle, Trash2, Camera, ShoppingCart, CreditCard, DollarSign, Wallet, Smartphone, Loader2, Fullscreen, X } from "lucide-react";
 import Image from "next/image";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -15,6 +15,9 @@ import { Label } from '@/components/ui/label';
 import { getProducts } from '@/lib/data';
 import type { Product } from '@/lib/types';
 import { Skeleton } from '@/components/ui/skeleton';
+import screenfull from 'screenfull';
+import { cn } from '@/lib/utils';
+
 
 type CartItem = Product & { quantity: number };
 
@@ -30,9 +33,36 @@ export default function PosPage() {
     
     const [productCatalog, setProductCatalog] = useState<Product[]>([]);
     const [isLoadingProducts, setIsLoadingProducts] = useState(true);
+    const [isFullscreen, setIsFullscreen] = useState(false);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const posContainerRef = useRef<HTMLDivElement>(null);
+
+     useEffect(() => {
+        const handleFullscreenChange = () => {
+            if (screenfull.isEnabled) {
+                setIsFullscreen(screenfull.isFullscreen);
+            }
+        };
+
+        if (screenfull.isEnabled) {
+            screenfull.on('change', handleFullscreenChange);
+        }
+
+        return () => {
+            if (screenfull.isEnabled) {
+                screenfull.off('change', handleFullscreenChange);
+            }
+        };
+    }, []);
+
+    const toggleFullscreen = () => {
+        if (screenfull.isEnabled && posContainerRef.current) {
+            screenfull.toggle(posContainerRef.current);
+        }
+    };
+
 
     useEffect(() => {
         const fetchProducts = async () => {
@@ -175,6 +205,11 @@ export default function PosPage() {
     // Keyboard shortcuts
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'F11') {
+                event.preventDefault();
+                toggleFullscreen();
+            }
+            
             const target = event.target as HTMLElement;
 
             // When an input is focused, only allow specific keys
@@ -264,7 +299,7 @@ export default function PosPage() {
       };
 
     return (
-        <div className="grid h-[calc(100vh-8rem)] grid-cols-1 gap-4 md:grid-cols-3">
+        <div ref={posContainerRef} className={cn("grid h-[calc(100vh-8rem)] grid-cols-1 gap-4 md:grid-cols-3 bg-background p-1", isFullscreen && "fixed inset-0 z-50 h-screen p-4")}>
             {/* Cart Section */}
             <div className="md:col-span-1">
                 <Card className="flex h-full flex-col">
@@ -311,7 +346,7 @@ export default function PosPage() {
                                 <span>R$ {total.toFixed(2)}</span>
                             </div>
                         </div>
-                        <Button size="lg" className="w-full font-bold" onClick={handleFinalizeSale} disabled={cartItems.length === 0}>Finalizar Venda</Button>
+                        <Button size="lg" className="w-full font-bold" onClick={handleFinalizeSale} disabled={cartItems.length === 0}>Finalizar Venda (F4)</Button>
                     </CardFooter>
                 </Card>
             </div>
@@ -320,51 +355,56 @@ export default function PosPage() {
             <div className="md:col-span-2">
                 <Card className="h-full flex flex-col">
                     <CardHeader className="p-4">
-                        <div className="flex gap-2">
-                            <div className="relative flex-1">
-                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                <Input 
-                                    ref={searchInputRef}
-                                    placeholder="Buscar produto por nome ou código... (F2)" 
-                                    className="pl-8" 
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                />
-                            </div>
-                            <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
-                                <DialogTrigger asChild>
-                                    <Button variant="outline" className="shrink-0">
-                                        <Camera className="mr-2 h-4 w-4" />
-                                        Escanear (F8)
-                                    </Button>
-                                </DialogTrigger>
-                                <DialogContent className="sm:max-w-md">
-                                    <DialogHeader>
-                                        <DialogTitle>Escanear Código de Barras</DialogTitle>
-                                        <DialogDescription>Aponte a câmera para o código de barras do produto.</DialogDescription>
-                                    </DialogHeader>
-                                    <div className="relative mt-4">
-                                        <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted" autoPlay muted playsInline />
-                                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                                            <div className="w-4/5 h-1/3 border-2 border-primary/50 rounded-lg" />
-                                        </div>
-                                    </div>
-                                    {hasCameraPermission === false && (
-                                        <Alert variant="destructive" className="mt-4">
-                                            <AlertTitle>Acesso à Câmera Necessário</AlertTitle>
-                                            <AlertDescription>
-                                                Por favor, permita o acesso à câmera para usar esta funcionalidade.
-                                            </AlertDescription>
-                                        </Alert>
-                                    )}
-                                    <DialogFooter className="mt-4">
-                                        <Button type="button" variant="secondary" onClick={() => setIsCameraOpen(false)}>Cancelar</Button>
-                                        <Button type="button" onClick={simulateScan} disabled={!hasCameraPermission}>
-                                            Simular Escaneamento
+                        <div className="flex gap-2 justify-between items-center">
+                            <div className="flex gap-2 flex-1">
+                                <div className="relative flex-1">
+                                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                    <Input 
+                                        ref={searchInputRef}
+                                        placeholder="Buscar produto por nome ou código... (F2)" 
+                                        className="pl-8" 
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                    />
+                                </div>
+                                <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
+                                    <DialogTrigger asChild>
+                                        <Button variant="outline" className="shrink-0">
+                                            <Camera className="mr-2 h-4 w-4" />
+                                            Escanear (F8)
                                         </Button>
-                                    </DialogFooter>
-                                </DialogContent>
-                            </Dialog>
+                                    </DialogTrigger>
+                                    <DialogContent className="sm:max-w-md">
+                                        <DialogHeader>
+                                            <DialogTitle>Escanear Código de Barras</DialogTitle>
+                                            <DialogDescription>Aponte a câmera para o código de barras do produto.</DialogDescription>
+                                        </DialogHeader>
+                                        <div className="relative mt-4">
+                                            <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted" autoPlay muted playsInline />
+                                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                                <div className="w-4/5 h-1/3 border-2 border-primary/50 rounded-lg" />
+                                            </div>
+                                        </div>
+                                        {hasCameraPermission === false && (
+                                            <Alert variant="destructive" className="mt-4">
+                                                <AlertTitle>Acesso à Câmera Necessário</AlertTitle>
+                                                <AlertDescription>
+                                                    Por favor, permita o acesso à câmera para usar esta funcionalidade.
+                                                </AlertDescription>
+                                            </Alert>
+                                        )}
+                                        <DialogFooter className="mt-4">
+                                            <Button type="button" variant="secondary" onClick={() => setIsCameraOpen(false)}>Cancelar</Button>
+                                            <Button type="button" onClick={simulateScan} disabled={!hasCameraPermission}>
+                                                Simular Escaneamento
+                                            </Button>
+                                        </DialogFooter>
+                                    </DialogContent>
+                                </Dialog>
+                            </div>
+                             <Button variant="ghost" size="icon" onClick={toggleFullscreen} title={isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia (F11)"}>
+                                {isFullscreen ? <X className="h-5 w-5" /> : <Fullscreen className="h-5 w-5" />}
+                            </Button>
                         </div>
                     </CardHeader>
                     <CardContent className="p-4 flex-1 overflow-y-auto">
@@ -414,6 +454,10 @@ export default function PosPage() {
                             <div className="flex items-center gap-1.5">
                                 <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-foreground">F8</kbd>
                                 <span>Escanear</span>
+                            </div>
+                             <div className="flex items-center gap-1.5">
+                                <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-foreground">F11</kbd>
+                                <span>Tela Cheia</span>
                             </div>
                              <div className="flex items-center gap-1.5">
                                 <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-foreground">Esc</kbd>

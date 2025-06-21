@@ -9,6 +9,7 @@ import {
   Truck,
   ClipboardList,
   Landmark,
+  Tv2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -30,6 +31,7 @@ export const allNavItems: NavItem[] = [
   { href: "/employees", label: "Funcionários", icon: UsersRound, roles: ['Admin'] },
   { href: "/contacts", label: "Clientes", icon: Users, roles: ['Admin'] },
   { href: "/cash-closing", label: "Fechamento de Caixa", icon: Landmark, roles: ['Admin', 'Caixa'] },
+  { href: "/display", label: "Modo TV", icon: Tv2, roles: ['Admin'] },
 ];
 
 export const getNavItemsForRole = (role: 'Admin' | 'Caixa') => {

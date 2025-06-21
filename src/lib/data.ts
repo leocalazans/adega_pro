@@ -1,4 +1,4 @@
-import type { Product, Employee, Expense, ShiftSummary } from './types';
+import type { Product, Employee, Expense, ShiftSummary, Promotion } from './types';
 
 // Using a Map for easier lookups
 const productsData: Product[] = [
@@ -49,6 +49,14 @@ const shiftSummaryData: ShiftSummary = {
   }
 };
 
+const promotionsData: Promotion[] = [
+  { id: 'PROMO01', productName: "Combo Whisky + Energético", price: "R$ 130,00", image: "https://placehold.co/800x600.png", hint: "whiskey drinks", highlight: "OFERTA IMPERDÍVEL" },
+  { id: 'PROMO02', productName: "Cerveja Pilsen Pack 6", price: "R$ 19,99", image: "https://placehold.co/800x600.png", hint: "beer party" },
+  { id: 'PROMO03', productName: "Vinho Tinto Suave", price: "Pague 2 Leve 3", image: "https://placehold.co/800x600.png", hint: "wine glasses", highlight: "SÓ HOJE" },
+  { id: 'PROMO04', productName: "Gin com Tônica", price: "Dose Dupla", image: "https://placehold.co/800x600.png", hint: "cocktail gin" },
+];
+
+
 // Simulate an API call with a short delay
 const apiDelay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -77,4 +85,9 @@ export async function getExpenses(): Promise<Expense[]> {
 export async function getShiftSummary(): Promise<ShiftSummary> {
     await apiDelay(50);
     return shiftSummaryData;
+}
+
+export async function getPromotions(): Promise<Promotion[]> {
+    await apiDelay(20);
+    return promotionsData;
 }
