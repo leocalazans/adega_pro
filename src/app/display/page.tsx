@@ -9,8 +9,8 @@ import { Button } from '@/components/ui/button';
 import { Volume2, VolumeX, MonitorPlay, Image as ImageIcon } from 'lucide-react';
 
 const PROMOTION_INTERVAL = 8000; // 8 seconds
-const MUSIC_URL = "https://cdn.pixabay.com/download/audio/2022/08/04/audio_2d891b22e1.mp3"; // Royalty-free Lofi
-const VIDEO_URL = "https://videos.pexels.com/video-files/2759477/2759477-hd_1920_1080_25fps.mp4"; // Royalty-free video of people at a bar
+const MUSIC_URL = "https://cdn.pixabay.com/download/audio/2022/05/27/audio_188a9f064c.mp3"; // Royalty-free Lofi
+const VIDEO_URL = "https://videos.pexels.com/video-files/4784098/4784098-hd_1920_1080_25fps.mp4"; // Royalty-free video of people at a bar
 
 export default function DisplayPage() {
   const [promotions, setPromotions] = useState<Promotion[]>([]);
@@ -65,7 +65,6 @@ export default function DisplayPage() {
       });
     }
     if (audio) {
-      // Audio is muted by default via state, so this should be allowed.
       audio.play().catch(error => {
         console.error("Error attempting to play audio:", error);
       });
