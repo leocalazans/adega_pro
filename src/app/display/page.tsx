@@ -18,8 +18,8 @@ export default function DisplayPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'promotions' | 'video'>('promotions');
   const [isMuted, setIsMuted] = useState(true);
-  const [hasInteracted, setHasInteracted] = useState(false);
 
+  const interactionRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -46,26 +46,29 @@ export default function DisplayPage() {
     }
   }, [promotions]);
   
-  // Sync the muted state of the audio element with our React state
   useEffect(() => {
       if (audioRef.current) {
           audioRef.current.muted = isMuted;
       }
   }, [isMuted]);
   
-  // This effect runs once after the first user interaction
-  useEffect(() => {
-    // Programmatically play media once the user has interacted with the page
-    // to comply with browser autoplay policies.
-    if (hasInteracted) {
-      videoRef.current?.play().catch(e => console.error("Video play failed:", e));
-      audioRef.current?.play().catch(e => console.error("Audio play failed:", e));
-    }
-  }, [hasInteracted]);
+  const handleUserInteraction = () => {
+    if (interactionRef.current) return;
+    interactionRef.current = true;
 
-  const handleInitialInteraction = () => {
-    if (!hasInteracted) {
-        setHasInteracted(true);
+    const video = videoRef.current;
+    const audio = audioRef.current;
+
+    if (video) {
+      video.play().catch(error => {
+        console.error("Error attempting to play video:", error);
+      });
+    }
+    if (audio) {
+      // Audio is muted by default via state, so this should be allowed.
+      audio.play().catch(error => {
+        console.error("Error attempting to play audio:", error);
+      });
     }
   };
   
@@ -81,7 +84,7 @@ export default function DisplayPage() {
 
   return (
     // Any click on the screen will count as the first interaction
-    <div className="relative h-screen w-screen overflow-hidden bg-black text-white font-sans" onClick={handleInitialInteraction}>
+    <div className="relative h-screen w-screen overflow-hidden bg-black text-white font-sans" onClick={handleUserInteraction}>
       <style jsx global>{`
         .font-anton { font-family: 'Anton', sans-serif; }
         .font-poppins { font-family: 'Poppins', sans-serif; }
@@ -143,15 +146,15 @@ export default function DisplayPage() {
         </div>
       )}
 
-      <audio ref={audioRef} loop>
+      <audio ref={audioRef} loop playsInline>
         <source src={MUSIC_URL} type="audio/mpeg" />
       </audio>
 
       <div className="absolute bottom-4 right-4 z-30 flex gap-3">
-         <Button onClick={() => setViewMode(prev => prev === 'promotions' ? 'video' : 'promotions')} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
+         <Button onClick={(e) => { e.stopPropagation(); setViewMode(prev => prev === 'promotions' ? 'video' : 'promotions'); }} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
             {viewMode === 'promotions' ? <MonitorPlay /> : <ImageIcon />}
          </Button>
-         <Button onClick={() => setIsMuted(prev => !prev)} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
+         <Button onClick={(e) => { e.stopPropagation(); setIsMuted(prev => !prev); }} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
             {isMuted ? <VolumeX /> : <Volume2 />}
          </Button>
       </div>
