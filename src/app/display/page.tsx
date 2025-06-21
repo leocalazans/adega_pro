@@ -19,7 +19,6 @@ export default function DisplayPage() {
   const [viewMode, setViewMode] = useState<'promotions' | 'video'>('promotions');
   const [isMuted, setIsMuted] = useState(true);
 
-  const interactionRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -52,28 +51,33 @@ export default function DisplayPage() {
           audioRef.current.muted = isMuted;
       }
   }, [isMuted]);
-  
-  // This is the most critical part. It handles the browser's autoplay restrictions.
-  const handleUserInteraction = () => {
-    // We only want this to run once on the first click/tap.
-    if (interactionRef.current) return;
-    interactionRef.current = true;
 
-    const video = videoRef.current;
+  const handleToggleView = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setViewMode(prevMode => {
+      const newMode = prevMode === 'promotions' ? 'video' : 'promotions';
+      const video = videoRef.current;
+      if (video) {
+        if (newMode === 'video') {
+          video.play().catch(err => console.error("Video play failed:", err));
+        } else {
+          video.pause();
+        }
+      }
+      return newMode;
+    });
+  };
+
+  const handleToggleMute = (e: React.MouseEvent) => {
+    e.stopPropagation();
     const audio = audioRef.current;
-
-    // Forcing play on both elements if they are paused.
-    // The video is muted, so it should play.
-    // The audio will play silently until unmuted by the user.
-    if (video && video.paused) {
-      video.play().catch(error => {
-        console.error("Error attempting to play video:", error);
-      });
-    }
-    if (audio && audio.paused) {
-      audio.play().catch(error => {
-        console.error("Error attempting to play audio:", error);
-      });
+    if (!audio) return;
+    
+    if (audio.paused) {
+      audio.play().catch(err => console.error("Audio play failed:", err));
+      setIsMuted(false);
+    } else {
+      setIsMuted(prev => !prev);
     }
   };
   
@@ -88,8 +92,7 @@ export default function DisplayPage() {
   const currentPromotion = promotions[currentPromotionIndex];
 
   return (
-    // Any click on the screen will count as the first interaction to enable media playback.
-    <div className="relative h-screen w-screen overflow-hidden bg-black text-white font-sans" onClick={handleUserInteraction}>
+    <div className="relative h-screen w-screen overflow-hidden bg-black text-white font-sans">
       <style jsx global>{`
         .font-anton { font-family: 'Anton', sans-serif; }
         .font-poppins { font-family: 'Poppins', sans-serif; }
@@ -114,9 +117,8 @@ export default function DisplayPage() {
           ref={videoRef}
           src={VIDEO_URL}
           className="absolute top-0 left-0 w-full h-full object-cover animate-fade-in"
-          autoPlay
           loop
-          muted
+          muted // The main video is always muted to prevent sound overlap
           playsInline
         />
       )}
@@ -154,14 +156,14 @@ export default function DisplayPage() {
         ref={audioRef} 
         src={MUSIC_URL}
         loop 
-        playsInline 
+        playsInline
       />
 
       <div className="absolute bottom-4 right-4 z-30 flex gap-3">
-         <Button onClick={(e) => { e.stopPropagation(); setViewMode(prev => prev === 'promotions' ? 'video' : 'promotions'); }} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
+         <Button onClick={handleToggleView} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
             {viewMode === 'promotions' ? <MonitorPlay /> : <ImageIcon />}
          </Button>
-         <Button onClick={(e) => { e.stopPropagation(); setIsMuted(prev => !prev); }} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
+         <Button onClick={handleToggleMute} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
             {isMuted ? <VolumeX /> : <Volume2 />}
          </Button>
       </div>
