@@ -46,25 +46,31 @@ export default function DisplayPage() {
     }
   }, [promotions]);
   
+  // This effect syncs the audio element's muted property with our state
   useEffect(() => {
       if (audioRef.current) {
           audioRef.current.muted = isMuted;
       }
   }, [isMuted]);
   
+  // This is the most critical part. It handles the browser's autoplay restrictions.
   const handleUserInteraction = () => {
+    // We only want this to run once on the first click/tap.
     if (interactionRef.current) return;
     interactionRef.current = true;
 
     const video = videoRef.current;
     const audio = audioRef.current;
 
-    if (video) {
+    // Forcing play on both elements if they are paused.
+    // The video is muted, so it should play.
+    // The audio will play silently until unmuted by the user.
+    if (video && video.paused) {
       video.play().catch(error => {
         console.error("Error attempting to play video:", error);
       });
     }
-    if (audio) {
+    if (audio && audio.paused) {
       audio.play().catch(error => {
         console.error("Error attempting to play audio:", error);
       });
@@ -82,7 +88,7 @@ export default function DisplayPage() {
   const currentPromotion = promotions[currentPromotionIndex];
 
   return (
-    // Any click on the screen will count as the first interaction
+    // Any click on the screen will count as the first interaction to enable media playback.
     <div className="relative h-screen w-screen overflow-hidden bg-black text-white font-sans" onClick={handleUserInteraction}>
       <style jsx global>{`
         .font-anton { font-family: 'Anton', sans-serif; }
@@ -106,14 +112,13 @@ export default function DisplayPage() {
       {viewMode === 'video' && (
         <video
           ref={videoRef}
-          key="bg-video"
+          src={VIDEO_URL}
           className="absolute top-0 left-0 w-full h-full object-cover animate-fade-in"
+          autoPlay
           loop
-          muted // The video is always muted, only the background audio has sound control
-          playsInline // Important for iOS
-        >
-          <source src={VIDEO_URL} type="video/mp4" />
-        </video>
+          muted
+          playsInline
+        />
       )}
 
       {viewMode === 'promotions' && currentPromotion && (
@@ -145,9 +150,12 @@ export default function DisplayPage() {
         </div>
       )}
 
-      <audio ref={audioRef} loop playsInline>
-        <source src={MUSIC_URL} type="audio/mpeg" />
-      </audio>
+      <audio 
+        ref={audioRef} 
+        src={MUSIC_URL}
+        loop 
+        playsInline 
+      />
 
       <div className="absolute bottom-4 right-4 z-30 flex gap-3">
          <Button onClick={(e) => { e.stopPropagation(); setViewMode(prev => prev === 'promotions' ? 'video' : 'promotions'); }} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
