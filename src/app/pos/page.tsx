@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -34,6 +33,7 @@ export default function PosPage() {
     const [isCameraOpen, setIsCameraOpen] = useState(false);
     const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
+    const searchInputRef = useRef<HTMLInputElement>(null);
 
     const handleAddToCart = useCallback((product: Product) => {
         setCartItems(prevItems => {
@@ -67,7 +67,11 @@ export default function PosPage() {
         setCartItems(prevItems => prevItems.filter(item => item.id !== productId));
     };
 
-    const handleFinalizeSale = () => {
+    const subtotal = cartItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
+    const discount = 0; // Placeholder for discount logic
+    const total = subtotal - discount;
+
+    const handleFinalizeSale = useCallback(() => {
         if (cartItems.length === 0) {
             toast({
                 variant: "destructive",
@@ -81,16 +85,12 @@ export default function PosPage() {
             description: `Total: R$ ${total.toFixed(2)}. O carrinho foi limpo.`,
         });
         setCartItems([]);
-    };
+    }, [cartItems, total, toast]);
     
     const filteredProducts = productCatalog.filter(p =>
         p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         p.barcode?.includes(searchTerm)
     );
-
-    const subtotal = cartItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
-    const discount = 0; // Placeholder for discount logic
-    const total = subtotal - discount;
 
     useEffect(() => {
         if (!isCameraOpen) {
@@ -130,6 +130,46 @@ export default function PosPage() {
             }
         }
       }, [isCameraOpen, toast]);
+
+    // Keyboard shortcuts
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement;
+            // Ignore shortcuts if an input or textarea is focused, unless it's the Escape key
+            if ( (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') && event.key !== 'Escape' ) {
+                return;
+            }
+
+            switch (event.key) {
+                case 'F2':
+                    event.preventDefault();
+                    searchInputRef.current?.focus();
+                    setSearchTerm('');
+                    break;
+                case 'F4':
+                    event.preventDefault();
+                    handleFinalizeSale();
+                    break;
+                case 'F8':
+                    event.preventDefault();
+                    setIsCameraOpen(true);
+                    break;
+                case 'Escape':
+                    if (isCameraOpen) {
+                        setIsCameraOpen(false);
+                    } else if (document.activeElement instanceof HTMLElement) {
+                        document.activeElement.blur();
+                    }
+                    break;
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [handleFinalizeSale, isCameraOpen]);
 
       const simulateScan = () => {
         // In a real app, a library like zxing-js would decode the barcode from the video stream
@@ -203,6 +243,7 @@ export default function PosPage() {
                             <div className="relative flex-1">
                                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                                 <Input 
+                                    ref={searchInputRef}
                                     placeholder="Buscar produto por nome ou código..." 
                                     className="pl-8" 
                                     value={searchTerm}
@@ -267,6 +308,27 @@ export default function PosPage() {
                            </div>
                         )}
                     </CardContent>
+                    <CardFooter className="p-3 border-t">
+                        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            <span className="font-semibold">Atalhos:</span>
+                            <div className="flex items-center gap-1.5">
+                                <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-foreground">F2</kbd>
+                                <span>Buscar</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-foreground">F4</kbd>
+                                <span>Finalizar</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-foreground">F8</kbd>
+                                <span>Escanear</span>
+                            </div>
+                             <div className="flex items-center gap-1.5">
+                                <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-foreground">Esc</kbd>
+                                <span>Sair do Foco/Fechar</span>
+                            </div>
+                        </div>
+                    </CardFooter>
                 </Card>
             </div>
         </div>
