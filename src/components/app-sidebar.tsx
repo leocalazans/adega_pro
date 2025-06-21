@@ -15,20 +15,26 @@ import {
   LayoutDashboard,
   ShoppingCart,
   Package,
-  Wallet,
   FileText,
   Users,
   Settings,
   Wine,
+  UsersRound,
+  TrendingDown,
+  Truck,
+  ClipboardList
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/pos", label: "Frente de Caixa", icon: ShoppingCart },
   { href: "/products", label: "Produtos", icon: Package },
-  { href: "/restock", label: "Reposição IA", icon: Wallet },
+  { href: "/restock", label: "Compras IA", icon: ClipboardList },
   { href: "/reports", label: "Relatórios", icon: FileText },
-  { href: "/contacts", label: "Contatos", icon: Users },
+  { href: "/expenses", label: "Despesas", icon: TrendingDown },
+  { href: "/suppliers", label: "Fornecedores", icon: Truck },
+  { href: "/employees", label: "Funcionários", icon: UsersRound },
+  { href: "/contacts", label: "Clientes", icon: Users },
 ];
 
 export function AppSidebar() {

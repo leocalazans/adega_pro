@@ -5,11 +5,13 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, PlusCircle, MinusCircle, Trash2, Camera, ShoppingCart } from "lucide-react";
+import { Search, PlusCircle, MinusCircle, Trash2, Camera, ShoppingCart, CreditCard, DollarSign, Wallet, Smartphone } from "lucide-react";
 import Image from "next/image";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Label } from '@/components/ui/label';
 
 // In a real app, this would come from an API
 const productCatalog = [
@@ -32,6 +34,10 @@ export default function PosPage() {
     const [searchTerm, setSearchTerm] = useState("");
     const [isCameraOpen, setIsCameraOpen] = useState(false);
     const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+    const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
+    const [paymentMethod, setPaymentMethod] = useState("credit_card");
+    const [amountPaid, setAmountPaid] = useState("");
+
     const videoRef = useRef<HTMLVideoElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -45,11 +51,7 @@ export default function PosPage() {
             }
             return [...prevItems, { ...product, quantity: 1 }];
         });
-        toast({
-            title: `${product.name} adicionado`,
-            description: "O item foi adicionado ao seu carrinho.",
-        });
-    }, [toast]);
+    }, []);
 
     const handleUpdateQuantity = (productId: number, newQuantity: number) => {
         if (newQuantity <= 0) {
@@ -70,6 +72,7 @@ export default function PosPage() {
     const subtotal = cartItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
     const discount = 0; // Placeholder for discount logic
     const total = subtotal - discount;
+    const change = paymentMethod === 'cash' && amountPaid ? parseFloat(amountPaid) - total : 0;
 
     const handleFinalizeSale = useCallback(() => {
         if (cartItems.length === 0) {
@@ -80,12 +83,36 @@ export default function PosPage() {
             });
             return;
         }
+        setIsPaymentDialogOpen(true);
+    }, [cartItems, toast]);
+
+    const handleConfirmPayment = () => {
+        const saleTotal = total.toFixed(2);
+        let toastDescription = `Total da venda: R$ ${saleTotal}.`;
+        
+        if (paymentMethod === 'cash') {
+            if (!amountPaid || parseFloat(amountPaid) < total) {
+                toast({
+                    variant: "destructive",
+                    title: "Valor Insuficiente",
+                    description: "O valor pago deve ser maior ou igual ao total da venda.",
+                });
+                return;
+            }
+            toastDescription += ` Troco: R$ ${change.toFixed(2)}.`;
+        }
+
         toast({
-            title: "Venda Finalizada!",
-            description: `Total: R$ ${total.toFixed(2)}. O carrinho foi limpo.`,
+            title: "Venda Finalizada com Sucesso!",
+            description: toastDescription,
         });
+
+        // Reset state
         setCartItems([]);
-    }, [cartItems, total, toast]);
+        setAmountPaid("");
+        setPaymentMethod("credit_card");
+        setIsPaymentDialogOpen(false);
+    };
     
     const filteredProducts = productCatalog.filter(p =>
         p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -135,7 +162,6 @@ export default function PosPage() {
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             const target = event.target as HTMLElement;
-            // Ignore shortcuts if an input or textarea is focused, unless it's the Escape key
             if ( (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') && event.key !== 'Escape' ) {
                 return;
             }
@@ -155,11 +181,8 @@ export default function PosPage() {
                     setIsCameraOpen(true);
                     break;
                 case 'Escape':
-                    if (isCameraOpen) {
-                        setIsCameraOpen(false);
-                    } else if (document.activeElement instanceof HTMLElement) {
-                        document.activeElement.blur();
-                    }
+                    if (isCameraOpen) setIsCameraOpen(false);
+                    if (isPaymentDialogOpen) setIsPaymentDialogOpen(false);
                     break;
             }
         };
@@ -169,10 +192,9 @@ export default function PosPage() {
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [handleFinalizeSale, isCameraOpen]);
+    }, [handleFinalizeSale, isCameraOpen, isPaymentDialogOpen]);
 
       const simulateScan = () => {
-        // In a real app, a library like zxing-js would decode the barcode from the video stream
         const randomProduct = productCatalog[Math.floor(Math.random() * productCatalog.length)];
         handleAddToCart(randomProduct);
         setIsCameraOpen(false);
@@ -244,7 +266,7 @@ export default function PosPage() {
                                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                                 <Input 
                                     ref={searchInputRef}
-                                    placeholder="Buscar produto por nome ou código..." 
+                                    placeholder="Buscar produto por nome ou código... (F2)" 
                                     className="pl-8" 
                                     value={searchTerm}
                                     onChange={(e) => setSearchTerm(e.target.value)}
@@ -254,7 +276,7 @@ export default function PosPage() {
                                 <DialogTrigger asChild>
                                     <Button variant="outline" className="shrink-0">
                                         <Camera className="mr-2 h-4 w-4" />
-                                        Escanear
+                                        Escanear (F8)
                                     </Button>
                                 </DialogTrigger>
                                 <DialogContent className="sm:max-w-md">
@@ -331,6 +353,65 @@ export default function PosPage() {
                     </CardFooter>
                 </Card>
             </div>
+             <Dialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle className="font-headline">Finalizar Venda</DialogTitle>
+                        <DialogDescription>Selecione a forma de pagamento.</DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-6 py-4">
+                        <div className="flex items-center justify-between text-2xl font-bold">
+                            <span>Total:</span>
+                            <span className="text-primary">R$ {total.toFixed(2)}</span>
+                        </div>
+                        <RadioGroup value={paymentMethod} onValueChange={setPaymentMethod}>
+                            <div className="grid grid-cols-2 gap-4">
+                                <Label htmlFor="payment_cash" className="flex flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
+                                    <RadioGroupItem value="cash" id="payment_cash" className="sr-only"/>
+                                    <DollarSign className="h-8 w-8" />
+                                    Dinheiro
+                                </Label>
+                                <Label htmlFor="payment_card" className="flex flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
+                                    <RadioGroupItem value="credit_card" id="payment_card" className="sr-only"/>
+                                    <CreditCard className="h-8 w-8" />
+                                    Cartão
+                                </Label>
+                                <Label htmlFor="payment_pix" className="flex flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
+                                    <RadioGroupItem value="pix" id="payment_pix" className="sr-only"/>
+                                    <Smartphone className="h-8 w-8" />
+                                    Pix
+                                </Label>
+                                <Label htmlFor="payment_other" className="flex flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
+                                    <RadioGroupItem value="other" id="payment_other" className="sr-only"/>
+                                    <Wallet className="h-8 w-8" />
+                                    Outro
+                                </Label>
+                            </div>
+                        </RadioGroup>
+                        {paymentMethod === 'cash' && (
+                            <div className="grid gap-2">
+                                <Label htmlFor="amount-paid">Valor Entregue</Label>
+                                <Input 
+                                    id="amount-paid" 
+                                    type="number" 
+                                    placeholder="R$ 0,00"
+                                    value={amountPaid}
+                                    onChange={(e) => setAmountPaid(e.target.value)}
+                                />
+                                {change > 0 && (
+                                    <div className="text-right font-medium text-lg">
+                                        Troco: <span className="text-primary">R$ {change.toFixed(2)}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsPaymentDialogOpen(false)}>Cancelar</Button>
+                        <Button onClick={handleConfirmPayment}>Confirmar Pagamento</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
