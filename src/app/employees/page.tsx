@@ -1,18 +1,132 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { UsersRound } from "lucide-react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { MoreHorizontal, PlusCircle, UserCheck, UserX } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+
+const employees = [
+  { id: 'EMP01', name: 'Ana Silva', role: 'Caixa', status: 'Ativo', avatar: 'https://placehold.co/40x40.png', hint: 'woman avatar' },
+  { id: 'EMP02', name: 'Bruno Costa', role: 'Gerente', status: 'Ativo', avatar: 'https://placehold.co/40x40.png', hint: 'man avatar' },
+  { id: 'EMP03', name: 'Carlos Dias', role: 'Caixa', status: 'Inativo', avatar: 'https://placehold.co/40x40.png', hint: 'man portrait' },
+  { id: 'EMP04', name: 'Daniela Souza', role: 'Estoquista', status: 'Ativo', avatar: 'https://placehold.co/40x40.png', hint: 'woman portrait' },
+  { id: 'EMP05', name: 'Eduardo Lima', role: 'Caixa', status: 'Ativo', avatar: 'https://placehold.co/40x40.png', hint: 'male avatar' },
+];
+
+const getStatusBadgeVariant = (status: string) => {
+    return status === 'Ativo' ? 'secondary' : 'destructive';
+}
+
+const getRoleBadgeVariant = (role: string) => {
+    switch (role) {
+        case 'Gerente': return 'default';
+        case 'Caixa': return 'outline';
+        case 'Estoquista': return 'secondary';
+        default: return 'outline';
+    }
+}
 
 export default function EmployeesPage() {
   return (
-    <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed shadow-sm">
-      <div className="flex flex-col items-center gap-2 text-center">
-        <UsersRound className="h-16 w-16 text-muted-foreground" />
-        <h3 className="text-2xl font-bold tracking-tight font-headline">
-          Gestão de Funcionários
-        </h3>
-        <p className="text-sm text-muted-foreground">
-          Esta funcionalidade está em construção.
-        </p>
-      </div>
-    </div>
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="font-headline">Gestão de Funcionários</CardTitle>
+            <CardDescription>Adicione, edite e gerencie os funcionários da sua loja.</CardDescription>
+          </div>
+          <Button>
+            <PlusCircle className="mr-2 h-4 w-4" />
+            Adicionar Funcionário
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Funcionário</TableHead>
+              <TableHead className="hidden md:table-cell">Cargo</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>
+                <span className="sr-only">Ações</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {employees.map(employee => (
+                <TableRow key={employee.id}>
+                    <TableCell className="font-medium">
+                        <div className="flex items-center gap-3">
+                            <Avatar className="h-9 w-9">
+                                <AvatarImage src={employee.avatar} alt={employee.name} data-ai-hint={employee.hint} />
+                                <AvatarFallback>{employee.name.charAt(0)}</AvatarFallback>
+                            </Avatar>
+                            <div className="grid gap-0.5">
+                                <span className="font-medium">{employee.name}</span>
+                                <span className="text-xs text-muted-foreground">{`ID: ${employee.id}`}</span>
+                            </div>
+                        </div>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                        <Badge variant={getRoleBadgeVariant(employee.role)}>{employee.role}</Badge>
+                    </TableCell>
+                    <TableCell>
+                        <Badge variant={getStatusBadgeVariant(employee.status)}>{employee.status}</Badge>
+                    </TableCell>
+                    <TableCell>
+                        <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button aria-haspopup="true" size="icon" variant="ghost">
+                            <MoreHorizontal className="h-4 w-4" />
+                            <span className="sr-only">Toggle menu</span>
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>Ações</DropdownMenuLabel>
+                            <DropdownMenuItem>Editar</DropdownMenuItem>
+                            <DropdownMenuItem>Ver Atividade</DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            {employee.status === 'Ativo' ? (
+                                <DropdownMenuItem className="text-destructive">
+                                    <UserX className="mr-2 h-4 w-4" />
+                                    Desativar
+                                </DropdownMenuItem>
+                            ) : (
+                                <DropdownMenuItem>
+                                    <UserCheck className="mr-2 h-4 w-4" />
+                                    Ativar
+                                </DropdownMenuItem>
+                            )}
+                        </DropdownMenuContent>
+                        </DropdownMenu>
+                    </TableCell>
+                </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }

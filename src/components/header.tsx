@@ -11,7 +11,8 @@ import {
   UsersRound,
   TrendingDown,
   Truck,
-  ClipboardList
+  ClipboardList,
+  Landmark,
 } from "lucide-react";
 
 const navItems = [
@@ -24,6 +25,7 @@ const navItems = [
   { href: "/suppliers", label: "Fornecedores", icon: Truck },
   { href: "/employees", label: "Funcionários", icon: UsersRound },
   { href: "/contacts", label: "Clientes", icon: Users },
+  { href: "/cash-closing", label: "Fechamento de Caixa", icon: Landmark },
 ];
 
 export default function Header() {
