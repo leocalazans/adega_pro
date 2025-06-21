@@ -19,16 +19,6 @@ import RestockSuggestionModal from "@/components/restock/restock-suggestion-moda
 import { getProducts } from "@/lib/data";
 import type { Product } from "@/lib/types";
 
-// Em um app real, os dados de vendas recentes viriam do banco de dados.
-// Aqui estamos adicionando um mock para a demonstração.
-const recentSalesData: Record<string, string> = {
-  'PROD005': "Vendas na última semana: 45 unidades.",
-  'PROD007': "Vendas na última semana: 1 unidade.",
-  'PROD001': "Vendas na última semana: 15 unidades.",
-  'PROD008': "Vendas na última semana: 22 unidades.",
-  'PROD002': "Vendas na última semana: 18 unidades.",
-};
-
 type ProductToRestock = Product & {
   recentSales: string;
   progress: number;
@@ -47,7 +37,7 @@ export default async function RestockPage() {
 
       return {
         ...p,
-        recentSales: recentSalesData[p.id] || "Sem dados de vendas recentes.",
+        recentSales: p.recentSales || "Sem dados de vendas recentes.",
         progress: stockPercentage,
         status,
       }

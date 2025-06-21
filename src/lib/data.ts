@@ -2,14 +2,14 @@ import type { Product, Employee, Expense, ShiftSummary } from './types';
 
 // Using a Map for easier lookups
 const productsData: Product[] = [
-    { id: 'PROD001', name: "Vinho Tinto Suave", price: 30.00, stock: 8, minStock: 10, category: 'Vinhos', image: "https://placehold.co/150x150.png", hint: "wine bottle", expiryDate: '15/12/2025', barcode: "78900001" },
-    { id: 'PROD002', name: "Cerveja Artesanal IPA", price: 15.00, stock: 40, minStock: 25, category: 'Cervejas', image: "https://placehold.co/150x150.png", hint: "beer bottle", expiryDate: '20/08/2024', barcode: "78900002" },
-    { id: 'PROD003', name: "Whisky 12 Anos", price: 120.00, stock: 15, minStock: 5, category: 'Destilados', image: "https://placehold.co/150x150.png", hint: "whiskey bottle", barcode: "78900003" },
-    { id: 'PROD004', name: "Gin Importado", price: 130.00, stock: 12, minStock: 10, category: 'Destilados', image: "https://placehold.co/150x150.png", hint: "gin bottle", barcode: "78900004" },
-    { id: 'PROD005', name: "Água Tônica", price: 5.00, stock: 3, minStock: 20, category: 'Não Alcoólicos', image: "https://placehold.co/150x150.png", hint: "soda can", expiryDate: '30/08/2024', barcode: "78900005" },
+    { id: 'PROD001', name: "Vinho Tinto Suave", price: 30.00, stock: 8, minStock: 10, category: 'Vinhos', image: "https://placehold.co/150x150.png", hint: "wine bottle", expiryDate: '15/12/2025', barcode: "78900001", recentSales: "Vendas na última semana: 15 unidades.", revenue: 1470.00 },
+    { id: 'PROD002', name: "Cerveja Artesanal IPA", price: 15.00, stock: 40, minStock: 25, category: 'Cervejas', image: "https://placehold.co/150x150.png", hint: "beer bottle", expiryDate: '20/08/2024', barcode: "78900002", recentSales: "Vendas na última semana: 18 unidades.", revenue: 4160.00 },
+    { id: 'PROD003', name: "Whisky 12 Anos", price: 120.00, stock: 15, minStock: 5, category: 'Destilados', image: "https://placehold.co/150x150.png", hint: "whiskey bottle", barcode: "78900003", revenue: 5400.00 },
+    { id: 'PROD004', name: "Gin Importado", price: 130.00, stock: 12, minStock: 10, category: 'Destilados', image: "https://placehold.co/150x150.png", hint: "gin bottle", barcode: "78900004", revenue: 3600.00 },
+    { id: 'PROD005', name: "Água Tônica", price: 5.00, stock: 3, minStock: 20, category: 'Não Alcoólicos', image: "https://placehold.co/150x150.png", hint: "soda can", expiryDate: '30/08/2024', barcode: "78900005", recentSales: "Vendas na última semana: 45 unidades.", revenue: 1050.00 },
     { id: 'PROD006', name: "Energético", price: 8.00, stock: 50, minStock: 20, category: 'Não Alcoólicos', image: "https://placehold.co/150x150.png", hint: "energy drink", expiryDate: '30/07/2024', barcode: "78900006" },
-    { id: 'PROD007', name: "Saca-rolhas", price: 25.00, stock: 2, minStock: 5, category: 'Acessórios', image: "https://placehold.co/150x150.png", hint: "corkscrew", barcode: "78900007" },
-    { id: 'PROD008', name: "Cerveja Pilsen Pack 6", price: 22.00, stock: 11, minStock: 15, category: 'Cervejas', image: "https://placehold.co/150x150.png", hint: "beer pack", barcode: "78900008" },
+    { id: 'PROD007', name: "Saca-rolhas", price: 25.00, stock: 2, minStock: 5, category: 'Acessórios', image: "https://placehold.co/150x150.png", hint: "corkscrew", barcode: "78900007", recentSales: "Vendas na última semana: 1 unidade." },
+    { id: 'PROD008', name: "Cerveja Pilsen Pack 6", price: 22.00, stock: 11, minStock: 15, category: 'Cervejas', image: "https://placehold.co/150x150.png", hint: "beer pack", barcode: "78900008", recentSales: "Vendas na última semana: 22 unidades." },
     { id: 'PROD009', name: "Salgadinho de Queijo", price: 7.50, stock: 25, minStock: 15, category: 'Snacks', image: "https://placehold.co/150x150.png", hint: "snack bag", expiryDate: '01/07/2024' },
     { id: 'PROD010', name: "Maço de Cigarros", price: 12.00, stock: 100, minStock: 30, category: 'Tabacaria', image: "https://placehold.co/150x150.png", hint: "cigarette pack" },
     { id: 'PROD011', name: "Isqueiro", price: 4.00, stock: 30, minStock: 10, category: 'Tabacaria', image: "https://placehold.co/150x150.png", hint: "lighter" },

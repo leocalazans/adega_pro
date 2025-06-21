@@ -10,6 +10,8 @@ export type Product = {
   minStock: number;
   supplierId?: string;
   expiryDate?: string;
+  recentSales?: string;
+  revenue?: number;
 };
 
 export type Employee = {

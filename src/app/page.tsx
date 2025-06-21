@@ -40,14 +40,6 @@ const stats = [
   },
 ];
 
-const topProductsMock = [
-  { id: "PROD001", revenue: 3600.00 },
-  { id: "PROD002", revenue: 1470.00 },
-  { id: "PROD003", revenue: 5400.00 },
-  { id: "PROD004", revenue: 4160.00 },
-  { id: "PROD005", revenue: 1050.00 },
-];
-
 export default async function DashboardPage() {
   const allProducts = await getProducts();
 
@@ -56,13 +48,15 @@ export default async function DashboardPage() {
     .sort((a,b) => (a.stock/a.minStock) - (b.stock/b.minStock))
     .slice(0, 5);
   
-  const topProducts = topProductsMock.map(mock => {
-    const product = allProducts.find(p => p.id === mock.id);
-    return {
-      name: product?.name || 'Produto não encontrado',
-      revenue: `R$ ${mock.revenue.toFixed(2)}`,
-    }
-  });
+  const topProducts = allProducts
+    .filter(p => p.revenue)
+    .sort((a, b) => (b.revenue || 0) - (a.revenue || 0))
+    .slice(0, 5)
+    .map(p => ({
+      name: p.name,
+      revenue: `R$ ${(p.revenue || 0).toFixed(2)}`
+    }));
+
 
   return (
     <div className="flex flex-col gap-8">
@@ -100,7 +94,7 @@ export default async function DashboardPage() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="font-headline">Produtos Mais Vendidos</CardTitle>
-            <CardDescription>Ranking deste mês.</CardDescription>
+            <CardDescription>Ranking de receita deste mês.</CardDescription>
           </CardHeader>
           <CardContent>
             <Table>
