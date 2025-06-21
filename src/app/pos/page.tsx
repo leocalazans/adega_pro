@@ -100,7 +100,7 @@ export default function PosPage() {
         setIsPaymentDialogOpen(true);
     }, [cartItems, toast]);
 
-    const handleConfirmPayment = () => {
+    const handleConfirmPayment = useCallback(() => {
         const saleTotal = total.toFixed(2);
         let toastDescription = `Total da venda: R$ ${saleTotal}.`;
         
@@ -126,7 +126,7 @@ export default function PosPage() {
         setAmountPaid("");
         setPaymentMethod("credit_card");
         setIsPaymentDialogOpen(false);
-    };
+    }, [total, paymentMethod, amountPaid, change, toast]);
     
     const filteredProducts = productCatalog.filter(p =>
         p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -176,10 +176,54 @@ export default function PosPage() {
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             const target = event.target as HTMLElement;
-            if ( (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') && event.key !== 'Escape' ) {
+
+            // When an input is focused, only allow specific keys
+            if ( (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+                 if (event.key === 'Escape') {
+                    // Universal escape behavior
+                    if (isCameraOpen) setIsCameraOpen(false);
+                    if (isPaymentDialogOpen) setIsPaymentDialogOpen(false);
+                    target.blur(); // Unfocus the input
+                 } else if (isPaymentDialogOpen && target.id === 'amount-paid' && event.key === 'Enter') {
+                    event.preventDefault();
+                    handleConfirmPayment();
+                 }
                 return;
             }
 
+            // Shortcuts for when the payment modal is open
+            if (isPaymentDialogOpen) {
+                switch(event.key) {
+                    case '1':
+                        event.preventDefault();
+                        setPaymentMethod('cash');
+                        break;
+                    case '2':
+                        event.preventDefault();
+                        setPaymentMethod('credit_card');
+                        break;
+                    case '3':
+                        event.preventDefault();
+                        setPaymentMethod('pix');
+                        break;
+                    case '4':
+                        event.preventDefault();
+                        setPaymentMethod('other');
+                        break;
+                    case 'Enter':
+                        event.preventDefault();
+                        handleConfirmPayment();
+                        break;
+                    case 'Escape':
+                        event.preventDefault();
+                        setIsPaymentDialogOpen(false);
+                        break;
+                }
+                return; // Don't process other shortcuts
+            }
+
+
+            // General shortcuts
             switch (event.key) {
                 case 'F2':
                     event.preventDefault();
@@ -195,8 +239,8 @@ export default function PosPage() {
                     setIsCameraOpen(true);
                     break;
                 case 'Escape':
+                    event.preventDefault();
                     if (isCameraOpen) setIsCameraOpen(false);
-                    if (isPaymentDialogOpen) setIsPaymentDialogOpen(false);
                     break;
             }
         };
@@ -206,7 +250,7 @@ export default function PosPage() {
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [handleFinalizeSale, isCameraOpen, isPaymentDialogOpen]);
+    }, [handleFinalizeSale, handleConfirmPayment, isCameraOpen, isPaymentDialogOpen]);
 
       const simulateScan = () => {
         if(productCatalog.length === 0) return;
@@ -392,25 +436,29 @@ export default function PosPage() {
                         </div>
                         <RadioGroup value={paymentMethod} onValueChange={setPaymentMethod}>
                             <div className="grid grid-cols-2 gap-4">
-                                <Label htmlFor="payment_cash" className="flex flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
+                                <Label htmlFor="payment_cash" className="relative flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
                                     <RadioGroupItem value="cash" id="payment_cash" className="sr-only"/>
                                     <DollarSign className="h-8 w-8" />
                                     Dinheiro
+                                    <kbd className="pointer-events-none absolute bottom-2 right-2 inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-60">1</kbd>
                                 </Label>
-                                <Label htmlFor="payment_card" className="flex flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
+                                <Label htmlFor="payment_card" className="relative flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
                                     <RadioGroupItem value="credit_card" id="payment_card" className="sr-only"/>
                                     <CreditCard className="h-8 w-8" />
                                     Cartão
+                                    <kbd className="pointer-events-none absolute bottom-2 right-2 inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-60">2</kbd>
                                 </Label>
-                                <Label htmlFor="payment_pix" className="flex flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
+                                <Label htmlFor="payment_pix" className="relative flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
                                     <RadioGroupItem value="pix" id="payment_pix" className="sr-only"/>
                                     <Smartphone className="h-8 w-8" />
                                     Pix
+                                    <kbd className="pointer-events-none absolute bottom-2 right-2 inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-60">3</kbd>
                                 </Label>
-                                <Label htmlFor="payment_other" className="flex flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
+                                <Label htmlFor="payment_other" className="relative flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary">
                                     <RadioGroupItem value="other" id="payment_other" className="sr-only"/>
                                     <Wallet className="h-8 w-8" />
                                     Outro
+                                    <kbd className="pointer-events-none absolute bottom-2 right-2 inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-60">4</kbd>
                                 </Label>
                             </div>
                         </RadioGroup>
@@ -434,7 +482,7 @@ export default function PosPage() {
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setIsPaymentDialogOpen(false)}>Cancelar</Button>
-                        <Button onClick={handleConfirmPayment}>Confirmar Pagamento</Button>
+                        <Button onClick={handleConfirmPayment}>Confirmar Pagamento (Enter)</Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
