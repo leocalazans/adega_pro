@@ -9,8 +9,10 @@ import { Button } from '@/components/ui/button';
 import { Volume2, VolumeX, MonitorPlay, Image as ImageIcon } from 'lucide-react';
 
 const PROMOTION_INTERVAL = 8000; // 8 seconds
-const MUSIC_URL = "https://cdn.pixabay.com/download/audio/2022/05/27/audio_188a9f064c.mp3"; // Royalty-free Lofi
-const VIDEO_URL = "https://videos.pexels.com/video-files/4784098/4784098-hd_1920_1080_25fps.mp4"; // Royalty-free video of people at a bar
+// Using more stable, hotlink-friendly URLs
+const MUSIC_URL = "https://archive.org/download/LofiHipHopByZenSounds/Lofi%20Hip%20Hop%20By%20Zen%20Sounds.mp3"; 
+const VIDEO_URL = "https://videos.pexels.com/video-files/853875/853875-hd_1920_1080_30fps.mp4"; 
+
 
 export default function DisplayPage() {
   const [promotions, setPromotions] = useState<Promotion[]>([]);
@@ -115,12 +117,13 @@ export default function DisplayPage() {
       {viewMode === 'video' && (
         <video
           ref={videoRef}
-          src={VIDEO_URL}
           className="absolute top-0 left-0 w-full h-full object-cover animate-fade-in"
           loop
           muted // The main video is always muted to prevent sound overlap
           playsInline
-        />
+        >
+          <source src={VIDEO_URL} type="video/mp4" />
+        </video>
       )}
 
       {viewMode === 'promotions' && currentPromotion && (
@@ -154,10 +157,11 @@ export default function DisplayPage() {
 
       <audio 
         ref={audioRef} 
-        src={MUSIC_URL}
         loop 
         playsInline
-      />
+      >
+        <source src={MUSIC_URL} type="audio/mpeg" />
+      </audio>
 
       <div className="absolute bottom-4 right-4 z-30 flex gap-3">
          <Button onClick={handleToggleView} variant="secondary" size="icon" className="rounded-full h-12 w-12 bg-black/50 hover:bg-black/80 border-white/20 border">
