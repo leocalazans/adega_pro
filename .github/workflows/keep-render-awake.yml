@@ -1,0 +1,22 @@
+name: Keep Render backend awake
+
+on:
+  schedule:
+    # GitHub Actions scheduling can be delayed, therefore this runs more often
+    # than Render's free-tier idle threshold.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call backend health endpoint
+        run: |
+          curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 \
+            https://adega-pro-sndh.onrender.com/health
