@@ -1,8 +1,12 @@
 use std::{env, net::SocketAddr, sync::Arc};
 
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use axum::{
     extract::{FromRequestParts, Path, Query, State},
-    http::{header, request::Parts, HeaderMap, StatusCode},
+    http::{header, request::Parts, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
@@ -33,6 +37,34 @@ struct TerminalAuth {
 #[derive(Debug, Clone)]
 struct OwnerAuth {
     tenant_id: Uuid,
+}
+
+#[derive(Debug, Clone)]
+struct PlatformAuth {
+    admin_id: Uuid,
+    email: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlatformLoginRequest {
+    email: String,
+    password: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PlatformAdminRecord {
+    id: Uuid,
+    email: String,
+    password_hash: String,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct PlatformTenantOut {
+    id: Uuid,
+    name: String,
+    units: i64,
+    terminals: i64,
+    online_terminals: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -567,6 +599,152 @@ fn header_uuid(headers: &HeaderMap, name: &'static str) -> Result<Uuid, ApiError
 
 fn hash_key(key: &str) -> String {
     hex::encode(Sha256::digest(key.as_bytes()))
+}
+
+fn password_hash(value: &str) -> Result<String, ApiError> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(value.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(internal)
+}
+
+fn platform_session_cookie(token: &str) -> Result<HeaderValue, ApiError> {
+    format!(
+        "__Host-commercectrl_session={token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=604800"
+    )
+    .parse()
+    .map_err(internal)
+}
+
+fn expired_platform_session_cookie() -> HeaderValue {
+    "__Host-commercectrl_session=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0"
+        .parse()
+        .expect("cookie estática válida")
+}
+
+fn platform_cookie(headers: &HeaderMap) -> Result<&str, ApiError> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| {
+            raw.split(';')
+                .map(str::trim)
+                .find_map(|part| part.strip_prefix("__Host-commercectrl_session="))
+        })
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão administrativa ausente"))
+}
+
+impl FromRequestParts<Arc<AppState>> for PlatformAuth {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let token = platform_cookie(&parts.headers)?;
+        let row = sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT a.id,a.email FROM platform_sessions s JOIN platform_admins a ON a.id=s.admin_id WHERE s.token_hash=$1 AND s.expires_at>now() AND a.active=true",
+        )
+        .bind(hash_key(token))
+        .fetch_optional(&state.db)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão administrativa expirada"))?;
+        let _ = sqlx::query("UPDATE platform_sessions SET last_seen_at=now() WHERE token_hash=$1")
+            .bind(hash_key(token))
+            .execute(&state.db)
+            .await;
+        Ok(Self {
+            admin_id: row.0,
+            email: row.1,
+        })
+    }
+}
+
+async fn platform_login(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<PlatformLoginRequest>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
+    let email = request.email.trim().to_lowercase();
+    if email.is_empty() || request.password.len() < 8 {
+        return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
+    }
+    let admin = sqlx::query_as::<_, PlatformAdminRecord>(
+        "SELECT id,email,password_hash FROM platform_admins WHERE email=$1 AND active=true",
+    )
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "credenciais inválidas"))?;
+    let parsed = PasswordHash::new(&admin.password_hash).map_err(|_| {
+        error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "credencial administrativa inválida",
+        )
+    })?;
+    Argon2::default()
+        .verify_password(request.password.as_bytes(), &parsed)
+        .map_err(|_| error(StatusCode::UNAUTHORIZED, "credenciais inválidas"))?;
+
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    sqlx::query("DELETE FROM platform_sessions WHERE expires_at<=now()")
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    sqlx::query("INSERT INTO platform_sessions(token_hash,admin_id,expires_at) VALUES($1,$2,now()+interval '7 days')")
+        .bind(hash_key(&token))
+        .bind(admin.id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE platform_admins SET last_login_at=now() WHERE id=$1")
+        .bind(admin.id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::SET_COOKIE, platform_session_cookie(&token)?);
+    Ok((
+        headers,
+        Json(serde_json::json!({"email":admin.email,"role":"superadmin"})),
+    ))
+}
+
+async fn platform_logout(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    headers: HeaderMap,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
+    let token = platform_cookie(&headers)?;
+    sqlx::query("DELETE FROM platform_sessions WHERE token_hash=$1 AND admin_id=$2")
+        .bind(hash_key(token))
+        .bind(auth.admin_id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::SET_COOKIE, expired_platform_session_cookie());
+    Ok((response_headers, Json(serde_json::json!({"ok":true}))))
+}
+
+async fn platform_me(auth: PlatformAuth) -> Json<Value> {
+    Json(serde_json::json!({"email":auth.email,"role":"superadmin"}))
+}
+
+async fn platform_tenants(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<Json<Vec<PlatformTenantOut>>, ApiError> {
+    let tenants = sqlx::query_as::<_, PlatformTenantOut>(
+        "SELECT t.id,t.name,COUNT(DISTINCT u.id)::bigint AS units,COUNT(DISTINCT terminal.id)::bigint AS terminals,COUNT(DISTINCT terminal.id) FILTER (WHERE terminal.active AND terminal.last_seen_at>now()-interval '15 minutes')::bigint AS online_terminals FROM tenants t LEFT JOIN units u ON u.tenant_id=t.id LEFT JOIN terminals terminal ON terminal.tenant_id=t.id GROUP BY t.id,t.name ORDER BY t.created_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(tenants))
 }
 
 impl FromRequestParts<Arc<AppState>> for TerminalAuth {
@@ -1182,6 +1360,23 @@ async fn sales_by_unit(
 }
 
 async fn bootstrap(pool: &PgPool) -> Result<(), sqlx::Error> {
+    if let (Ok(email), Ok(password)) = (
+        env::var("SUPERADMIN_EMAIL"),
+        env::var("SUPERADMIN_PASSWORD"),
+    ) {
+        if !email.trim().is_empty() && password.len() >= 12 {
+            let password_hash = password_hash(&password)
+                .map_err(|_| sqlx::Error::Protocol("hash da conta master inválido".into()))?;
+            sqlx::query("INSERT INTO platform_admins(id,email,password_hash,must_change_password) VALUES($1,$2,$3,true) ON CONFLICT(email) DO NOTHING")
+                .bind(Uuid::new_v4())
+                .bind(email.trim().to_lowercase())
+                .bind(password_hash)
+                .execute(pool)
+                .await?;
+        } else {
+            warn!("SUPERADMIN_PASSWORD ignorada: use pelo menos 12 caracteres");
+        }
+    }
     let tenant_id = env_uuid(
         "BOOTSTRAP_TENANT_ID",
         "00000000-0000-0000-0000-000000000001",
@@ -1311,6 +1506,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(AppState { db: pool });
     let app = Router::new()
         .route("/health", get(health))
+        .route("/api/v1/platform/auth/login", post(platform_login))
+        .route("/api/v1/platform/auth/logout", post(platform_logout))
+        .route("/api/v1/platform/me", get(platform_me))
+        .route("/api/v1/platform/tenants", get(platform_tenants))
         .route("/api/v1/sync/outbox", post(ingest_event))
         .route("/api/v1/sync/products", get(products))
         .route(
