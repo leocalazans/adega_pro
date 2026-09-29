@@ -1343,9 +1343,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/webhooks/asaas", post(asaas_webhook))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
-    let addr: SocketAddr = env::var("BIND_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:8080".into())
-        .parse()?;
+    // Render assigns the listening port at runtime through PORT.  Local Docker
+    // and desktop development can still explicitly set BIND_ADDR.
+    let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| {
+        let port = env::var("PORT").unwrap_or_else(|_| "8080".into());
+        format!("0.0.0.0:{port}")
+    });
+    let addr: SocketAddr = bind_addr.parse()?;
     info!(%addr, "CommerceCTRL backend iniciado");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
