@@ -1391,6 +1391,10 @@ async fn bootstrap(pool: &PgPool) -> Result<(), sqlx::Error> {
         env::var("BOOTSTRAP_OWNER_KEY").unwrap_or_else(|_| "commercectrl-owner-dev-key".into());
     let mut tx = pool.begin().await?;
     sqlx::query("INSERT INTO tenants(id,name) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET name=excluded.name").bind(tenant_id).bind(env::var("BOOTSTRAP_TENANT_NAME").unwrap_or_else(|_| "Mercadinho Martins".into())).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at) VALUES($1,'profissional','trial',now()+interval '3 months',now()+interval '3 months') ON CONFLICT(tenant_id) DO NOTHING")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO tenant_branding(tenant_id,display_name) VALUES($1,$2) ON CONFLICT(tenant_id) DO UPDATE SET display_name=excluded.display_name")
         .bind(tenant_id).bind(env::var("BOOTSTRAP_TENANT_NAME").unwrap_or_else(|_| "Mercadinho Martins".into())).execute(&mut *tx).await?;
     // A instalação local demonstra um único cliente com quatro lojas. IDs estáveis tornam
