@@ -9,7 +9,7 @@
 </script>
 
 <main class="saas-shell">
-  <nav><a class="saas-brand" href="/">CommerceCTRL</a><div><a href="#recursos">Recursos</a><a href="#planos">Planos</a><button onclick={onLogin}>Entrar</button><button onclick={onStart}>Criar minha loja <ArrowRight size={16}/></button></div></nav>
+  <nav><a class="saas-brand" href="/">CommerceCTRL</a><div><a href="#recursos">Recursos</a><a href="#planos">Planos</a><a href="/download">Baixar app</a><button onclick={onLogin}>Entrar</button><button onclick={onStart}>Criar minha loja <ArrowRight size={16}/></button></div></nav>
   <section class="market-banner" aria-label="Resumo de lançamento"><strong>CommerceCTRL para mercados que não podem parar</strong><span>PDV offline-first · estoque por unidade · implantação assistida</span><button onclick={onStart}>Agendar implantação</button></section>
   <section class="saas-hero">
     <div class="hero-copy"><p class="kicker">CommerceCTRL para mercados independentes</p><h1>O balcão anda.<br/>O sistema acompanha.</h1><p class="lead">Controle de mercado com a velocidade de quem não pode parar para a tela pensar.</p><div class="hero-actions"><button onclick={onStart}>Começar o cadastro <ArrowRight size={18}/></button><a href="#recursos">Conhecer a operação</a></div><p class="note">Funciona no computador do caixa e sincroniza quando houver internet.</p></div>

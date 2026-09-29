@@ -25,6 +25,7 @@
   import SaasLanding from "./pages/SaasLanding.svelte";
   import Onboarding from "./pages/Onboarding.svelte";
   import SuperAdmin from "./pages/SuperAdmin.svelte";
+  import DownloadPage from "./pages/Download.svelte";
 
   let path = $state(window.location.pathname);
   let sidebarOpen = $state(false);
@@ -129,7 +130,9 @@
 {#if !isDesktop && !session && (path === "/" || path === "/signup")}
   <SaasLanding onStart={() => navigate("/onboarding")} onLogin={() => navigate("/login")} />
 {:else if path === "/onboarding"}
-  <Onboarding onDone={() => navigate("/")} />
+  <Onboarding onDone={() => navigate("/download")} />
+{:else if !isDesktop && path === "/download"}
+  <DownloadPage onBack={() => navigate("/")} />
 {:else if path === "/display"}
   <Display />
 {:else if !session}
