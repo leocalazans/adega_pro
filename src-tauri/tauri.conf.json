@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CommerceCTRL PDV",
+  "version": "0.1.0",
+  "identifier": "br.com.commercectrl.pdv",
+  "build": {
+    "beforeDevCommand": "npm --prefix frontend-svelte run dev",
+    "devUrl": "http://localhost:9003",
+    "beforeBuildCommand": "npm --prefix frontend-svelte run build",
+    "frontendDist": "../frontend-svelte/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "CommerceCTRL PDV",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "maximized": true,
+        "fullscreen": true,
+        "alwaysOnTop": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data: https: http://127.0.0.1:8088; style-src 'self' 'unsafe-inline'; connect-src 'self' https: http://127.0.0.1:9001 http://127.0.0.1:8088; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "category": "Business",
+    "shortDescription": "PDV CommerceCTRL offline-first",
+    "longDescription": "Caixa CommerceCTRL offline-first com sincronização outbox, NFC-e em contingência, PIX e impressão ESC/POS.",
+    "windows": {
+      "nsis": null,
+      "wix": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZFQzNCQUQwRTAwM0Q1Q0QKUldUTjFRUGcwTHJEL3F0WUg4R3IrZTQwYWV3bTMxVXpqQys1QkdBYWFhQzE4WVB4eEVoc000NlcK",
+      "endpoints": ["https://sqwpkwsjbbkylbdpjrlu.supabase.co/storage/v1/object/public/desktop-releases/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
+  }
+}

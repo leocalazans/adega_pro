@@ -1,0 +1,60 @@
+name: Release Windows signed updater
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without v prefix
+        required: true
+        type: string
+jobs:
+  release:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      COMMERCECTRL_API_URL: ${{ secrets.COMMERCECTRL_API_URL }}
+      COMMERCECTRL_TENANT_ID: ${{ secrets.COMMERCECTRL_TENANT_ID }}
+      COMMERCECTRL_UNIT_ID: ${{ secrets.COMMERCECTRL_UNIT_ID }}
+      COMMERCECTRL_TERMINAL_ID: ${{ secrets.COMMERCECTRL_TERMINAL_ID }}
+      COMMERCECTRL_TERMINAL_KEY: ${{ secrets.COMMERCECTRL_TERMINAL_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_UPDATE_BUCKET: desktop-releases
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: frontend-svelte/package-lock.json }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - name: Install frontend
+        run: npm ci
+        working-directory: frontend-svelte
+      - name: Validate frontend
+        run: npm run check && npm test
+        working-directory: frontend-svelte
+      - name: Set version and production updater endpoint
+        shell: pwsh
+        run: |
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $config.version = '${{ inputs.version }}'
+          $config.plugins.updater.endpoints = @("$env:SUPABASE_URL/storage/v1/object/public/$env:SUPABASE_UPDATE_BUCKET/latest.json")
+          $config | ConvertTo-Json -Depth 20 | Set-Content src-tauri/tauri.conf.json
+      - name: Build signed installers
+        run: npx @tauri-apps/cli@latest build
+      - name: Publish signed updater to Supabase Storage
+        shell: pwsh
+        run: ./scripts/publish-update.ps1 -Version '${{ inputs.version }}'
+      - name: Trigger Render deploy
+        shell: pwsh
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: if($env:RENDER_DEPLOY_HOOK_URL){Invoke-WebRequest -Method Post -Uri $env:RENDER_DEPLOY_HOOK_URL | Out-Null}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CommerceCTRL-${{ inputs.version }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*
+            src-tauri/target/release/bundle/msi/*
