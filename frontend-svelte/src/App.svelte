@@ -34,14 +34,14 @@
   let pending = $state(0);
   let conflicts = $state(0);
   let syncError = $state("");
-  let isDesktop = $state(false);
+  let isDesktop = $state(inTauri());
   let adminExitOpen = $state(false);
   let adminConfigured = $state(true);
   let adminPin = $state("");
   let adminPinConfirmation = $state("");
   let adminExitError = $state("");
   let adminExitBusy = $state(false);
-  let clientName = $state("Mercadinho Martins");
+  let clientName = $state("Sua loja");
   let clientLogo = $state("");
   let session = $state<UserSession|null>(null);
 
@@ -57,7 +57,7 @@
     sidebarCollapsed = window.localStorage.getItem("commercectrl.sidebar.collapsed") === "true";
     darkTheme = window.localStorage.getItem("commercectrl.theme") === "dark";
     document.documentElement.classList.toggle("dark", darkTheme);
-    const applyBranding = (branding: { name?: string; logo?: string }) => { clientName = branding.name || "Mercadinho Martins"; clientLogo = branding.logo || ""; };
+    const applyBranding = (branding: { name?: string; logo?: string }) => { clientName = branding.name || "Sua loja"; clientLogo = branding.logo || ""; };
     try { const saved = JSON.parse(localStorage.getItem("commercectrl.client.branding") ?? "null"); if (saved) applyBranding(saved); } catch {}
     const brandingChanged = (event: Event) => applyBranding((event as CustomEvent<{ name: string; logo: string }>).detail);
     window.addEventListener("commercectrl-branding", brandingChanged);
@@ -126,14 +126,14 @@
   async function logout(){await logoutEmployee();session=null;path="/";history.replaceState({},"","/")}
 </script>
 
-{#if path === "/signup"}
-  <SaasLanding onStart={() => navigate("/onboarding")} />
+{#if !isDesktop && !session && (path === "/" || path === "/signup")}
+  <SaasLanding onStart={() => navigate("/onboarding")} onLogin={() => navigate("/login")} />
 {:else if path === "/onboarding"}
   <Onboarding onDone={() => navigate("/")} />
 {:else if path === "/display"}
   <Display />
 {:else if !session}
-  <Login onLogin={loggedIn}/>
+  <Login storeName={isDesktop ? clientName : "CommerceCTRL"} onLogin={loggedIn}/>
 {:else}
   <div class="app-shell">
     <aside class:open={sidebarOpen} class:collapsed={sidebarCollapsed || isPosRoute} class:pos-dock={isPosRoute} class="sidebar">

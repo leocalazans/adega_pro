@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ArrowRight, Check, MonitorSmartphone, PackageCheck, Store, Tv2 } from "@lucide/svelte";
-  let { onStart }: { onStart: () => void } = $props();
+  let { onStart, onLogin }: { onStart: () => void; onLogin: () => void } = $props();
   const benefits = [
     ["Venda mesmo sem internet", "PDV local, fila de sincronização e recuperação segura quando a conexão volta."],
     ["Uma operação, várias lojas", "Preço, estoque, promoções e TV por unidade — sem misturar a operação."],
@@ -9,10 +9,10 @@
 </script>
 
 <main class="saas-shell">
-  <nav><a class="saas-brand" href="/">_,CTRL</a><div><a href="#recursos">Recursos</a><a href="#planos">Planos</a><button onclick={onStart}>Criar minha loja <ArrowRight size={16}/></button></div></nav>
+  <nav><a class="saas-brand" href="/">CommerceCTRL</a><div><a href="#recursos">Recursos</a><a href="#planos">Planos</a><button onclick={onLogin}>Entrar</button><button onclick={onStart}>Criar minha loja <ArrowRight size={16}/></button></div></nav>
   <section class="saas-hero">
     <div class="hero-copy"><p class="kicker">CommerceCTRL para mercados independentes</p><h1>O balcão anda.<br/>O sistema acompanha.</h1><p class="lead">Controle de mercado com a velocidade de quem não pode parar para a tela pensar.</p><div class="hero-actions"><button onclick={onStart}>Começar o cadastro <ArrowRight size={18}/></button><a href="#recursos">Conhecer a operação</a></div><p class="note">Funciona no computador do caixa e sincroniza quando houver internet.</p></div>
-    <div class="price-board" aria-label="Resumo da operação"><div class="board-top"><span>Mercadinho Martins</span><span>Caixa 01</span></div><div class="board-product"><div class="product-shape">M</div><div><small>ITEM BIPADO</small><strong>Arroz tipo 1 · 5 kg</strong><em>Estoque da Matriz: 18 un.</em></div></div><div class="board-total"><span>Total da venda</span><b>R$ 42,90</b></div><div class="board-tags"><span>PIX</span><span>Cartão</span><span>Dinheiro</span></div></div>
+    <div class="price-board" aria-label="Resumo da operação"><div class="board-top"><span>Loja em operação</span><span>Caixa 01</span></div><div class="board-product"><div class="product-shape">C</div><div><small>ITEM BIPADO</small><strong>Arroz tipo 1 · 5 kg</strong><em>Estoque da unidade: 18 un.</em></div></div><div class="board-total"><span>Total da venda</span><b>R$ 42,90</b></div><div class="board-tags"><span>PIX</span><span>Cartão</span><span>Dinheiro</span></div></div>
   </section>
   <section id="recursos" class="benefit-grid">{#each benefits as benefit, index}<article><div class="benefit-no">0{index + 1}</div><h2>{benefit[0]}</h2><p>{benefit[1]}</p></article>{/each}</section>
   <section class="operation"><div><p class="kicker">Feito para a rotina inteira</p><h2>Do primeiro bip ao fechamento.</h2><p>Não é uma vitrine de relatórios. É a base para atender rápido, cuidar do estoque e saber qual unidade precisa de atenção antes que isso vire perda.</p></div><div class="operation-list"><p><MonitorSmartphone/> PDV com leitor, impressão e operação offline</p><p><PackageCheck/> Catálogo, estoque e preços por unidade</p><p><Tv2/> TV de ofertas vinculada ao catálogo real</p><p><Store/> Visão do dono para todas as lojas</p></div></section>
