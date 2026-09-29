@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: commercectrl-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: BIND_ADDR
+        value: 0.0.0.0:10000
+      - key: BOOTSTRAP_TERMINAL_KEY
+        sync: false
+      - key: BOOTSTRAP_OWNER_KEY
+        sync: false
+      - key: ASAAS_API_KEY
+        sync: false
+      - key: ASAAS_CUSTOMER_ID
+        sync: false
+      - key: ASAAS_WEBHOOK_TOKEN
+        sync: false
+      - key: LICENSE_ADMIN_KEY
+        sync: false
+      - key: LICENSE_SIGNING_KEY_B64
+        sync: false
+      - key: RUST_LOG
+        value: commercectrl_backend=info,tower_http=info
