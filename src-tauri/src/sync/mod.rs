@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::{Db, OutboxRow};
 use crate::state::AppState;
@@ -19,67 +19,89 @@ struct RemoteProduct {
     image_url: Option<String>,
 }
 
-fn env_or_dev(name: &str, build_default: &str, dev_default: &str) -> String {
-    // A distribuição de demonstração funciona com o Docker local sem exigir que
-    // o usuário saiba injetar variáveis no executável. Produção sobrescreve todos
-    // estes valores no instalador/configuração gerenciada.
-    std::env::var(name).unwrap_or_else(|_| {
-        if !build_default.is_empty() {
-            build_default.into()
-        } else if cfg!(debug_assertions) {
-            dev_default.into()
-        } else {
-            String::new()
-        }
+const TENANT_ID_SETTING: &str = "activation.tenant_id";
+const UNIT_ID_SETTING: &str = "activation.unit_id";
+const TERMINAL_ID_SETTING: &str = "activation.terminal_id";
+const TERMINAL_KEY_SETTING: &str = "activation.terminal_key";
+const API_URL_SETTING: &str = "activation.api_url";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActivationStatus {
+    pub activated: bool,
+    pub api_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TerminalCredentials {
+    pub tenant_id: String,
+    pub unit_id: String,
+    pub terminal_id: String,
+    pub terminal_key: String,
+    pub api_url: String,
+}
+
+pub fn api_url(db: &Db) -> String {
+    db.get_setting(API_URL_SETTING)
+        .ok()
+        .flatten()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            option_env!("COMMERCECTRL_API_URL")
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| {
+            if cfg!(debug_assertions) {
+                "http://127.0.0.1:8088".into()
+            } else {
+                String::new()
+            }
+        })
+}
+
+pub fn credentials(db: &Db) -> Option<TerminalCredentials> {
+    let get = |key| {
+        db.get_setting(key)
+            .ok()
+            .flatten()
+            .filter(|v| !v.trim().is_empty())
+    };
+    Some(TerminalCredentials {
+        tenant_id: get(TENANT_ID_SETTING)?,
+        unit_id: get(UNIT_ID_SETTING)?,
+        terminal_id: get(TERMINAL_ID_SETTING)?,
+        terminal_key: get(TERMINAL_KEY_SETTING)?,
+        api_url: api_url(db),
     })
+    .filter(|v| !v.api_url.is_empty())
 }
 
-fn api_url() -> String {
-    env_or_dev(
-        "COMMERCECTRL_API_URL",
-        option_env!("COMMERCECTRL_API_URL").unwrap_or(""),
-        "http://127.0.0.1:8088",
-    )
+pub fn activation_status(db: &Db) -> ActivationStatus {
+    ActivationStatus {
+        activated: credentials(db).is_some(),
+        api_url: (!api_url(db).is_empty()).then(|| api_url(db)),
+    }
 }
 
-fn tenant_id() -> String {
-    env_or_dev(
-        "COMMERCECTRL_TENANT_ID",
-        option_env!("COMMERCECTRL_TENANT_ID").unwrap_or(""),
-        "00000000-0000-0000-0000-000000000001",
-    )
+pub fn persist_credentials(db: &Db, credentials: &TerminalCredentials) -> Result<(), String> {
+    for (key, value) in [
+        (TENANT_ID_SETTING, &credentials.tenant_id),
+        (UNIT_ID_SETTING, &credentials.unit_id),
+        (TERMINAL_ID_SETTING, &credentials.terminal_id),
+        (TERMINAL_KEY_SETTING, &credentials.terminal_key),
+        (API_URL_SETTING, &credentials.api_url),
+    ] {
+        db.set_setting(key, value).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
-fn unit_id() -> String {
-    env_or_dev(
-        "COMMERCECTRL_UNIT_ID",
-        option_env!("COMMERCECTRL_UNIT_ID").unwrap_or(""),
-        "00000000-0000-0000-0000-000000000101",
-    )
-}
-
-fn terminal_id() -> String {
-    env_or_dev(
-        "COMMERCECTRL_TERMINAL_ID",
-        option_env!("COMMERCECTRL_TERMINAL_ID").unwrap_or(""),
-        "00000000-0000-0000-0000-000000001001",
-    )
-}
-
-fn terminal_key() -> String {
-    env_or_dev(
-        "COMMERCECTRL_TERMINAL_KEY",
-        option_env!("COMMERCECTRL_TERMINAL_KEY").unwrap_or(""),
-        "commercectrl-dev-key",
-    )
-}
-
-fn authenticated(request: ureq::Request) -> ureq::Request {
+pub fn authenticated(request: ureq::Request, credentials: &TerminalCredentials) -> ureq::Request {
     request
-        .set("X-Tenant-Id", &tenant_id())
-        .set("X-Unit-Id", &unit_id())
-        .set("X-Terminal-Id", &terminal_id())
-        .set("X-Terminal-Key", &terminal_key())
+        .set("X-Tenant-Id", &credentials.tenant_id)
+        .set("X-Unit-Id", &credentials.unit_id)
+        .set("X-Terminal-Id", &credentials.terminal_id)
+        .set("X-Terminal-Key", &credentials.terminal_key)
 }
 
 pub struct Outbox {
@@ -96,11 +118,7 @@ impl Outbox {
     }
 
     pub fn is_configured(&self) -> bool {
-        !api_url().is_empty()
-            && !tenant_id().is_empty()
-            && !unit_id().is_empty()
-            && !terminal_id().is_empty()
-            && !terminal_key().is_empty()
+        credentials(&self.db).is_some()
     }
 
     pub fn sync_pending(&self) -> rusqlite::Result<usize> {
@@ -110,7 +128,7 @@ impl Outbox {
         let rows = self.db.list_pending_outbox(100)?;
         let mut synced = 0usize;
         for row in rows {
-            match push_to_api(&row) {
+            match push_to_api(&self.db, &row) {
                 Ok(true) => {
                     self.db.mark_outbox_sent(row.id)?;
                     synced += 1;
@@ -124,11 +142,9 @@ impl Outbox {
     }
 }
 
-fn push_to_api(row: &OutboxRow) -> Result<bool, String> {
-    if api_url().is_empty() {
-        return Err("sincronização não configurada".into());
-    }
-    let endpoint = format!("{}/api/v1/sync/outbox", api_url());
+fn push_to_api(db: &Db, row: &OutboxRow) -> Result<bool, String> {
+    let credentials = credentials(db).ok_or("terminal não ativado")?;
+    let endpoint = format!("{}/api/v1/sync/outbox", credentials.api_url);
     let body = serde_json::json!({
         "uuid": row.uuid,
         "entity": row.entity,
@@ -138,7 +154,7 @@ fn push_to_api(row: &OutboxRow) -> Result<bool, String> {
     })
     .to_string();
 
-    let resp = authenticated(ureq::post(&endpoint))
+    let resp = authenticated(ureq::post(&endpoint), &credentials)
         .timeout(Duration::from_secs(5))
         .set("Content-Type", "application/json")
         .send_string(&body)
@@ -147,13 +163,14 @@ fn push_to_api(row: &OutboxRow) -> Result<bool, String> {
 }
 
 fn pull_products(db: &Db) -> Result<usize, String> {
-    if api_url().is_empty() {
-        return Ok(0);
-    }
-    let resp = authenticated(ureq::get(&format!("{}/api/v1/sync/products", api_url())))
-        .timeout(Duration::from_secs(5))
-        .call()
-        .map_err(|e| format!("{e}"))?;
+    let credentials = credentials(db).ok_or("terminal não ativado")?;
+    let resp = authenticated(
+        ureq::get(&format!("{}/api/v1/sync/products", credentials.api_url)),
+        &credentials,
+    )
+    .timeout(Duration::from_secs(5))
+    .call()
+    .map_err(|e| format!("{e}"))?;
     if !(200..300).contains(&resp.status()) {
         return Ok(0);
     }

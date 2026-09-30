@@ -77,6 +77,22 @@ struct TenantBranding {
     logo_data_url: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ActivationClaimRequest {
+    code: String,
+    terminal_name: String,
+    api_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivationClaimResponse {
+    tenant_id: String,
+    unit_id: String,
+    terminal_id: String,
+    terminal_key: String,
+    license: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct LocalDisplayLink {
     url: String,
@@ -831,6 +847,65 @@ fn license_status(state: tauri::State<'_, Arc<AppState>>) -> crate::license::Lic
 }
 
 #[tauri::command]
+fn activation_status(state: tauri::State<'_, Arc<AppState>>) -> crate::sync::ActivationStatus {
+    crate::sync::activation_status(&state.db)
+}
+
+#[tauri::command]
+fn claim_activation(
+    state: tauri::State<'_, Arc<AppState>>,
+    request: ActivationClaimRequest,
+) -> Result<crate::sync::ActivationStatus, String> {
+    let code = request.code.trim().to_uppercase();
+    let terminal_name = request.terminal_name.trim();
+    if !code.starts_with("CC-")
+        || code.len() > 64
+        || !(2..=120).contains(&terminal_name.chars().count())
+    {
+        return Err("Informe um código de ativação e um nome de terminal válidos".into());
+    }
+    let api_url = request
+        .api_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::sync::api_url(&state.db))
+        .trim_end_matches('/')
+        .to_string();
+    if !(api_url.starts_with("https://")
+        || (cfg!(debug_assertions) && api_url.starts_with("http://127.0.0.1")))
+    {
+        return Err("A URL do servidor de ativação não é válida".into());
+    }
+    let installation_id = crate::license::installation_id(&state.db)?;
+    let body = serde_json::json!({"code":code,"installation_id":installation_id,"terminal_name":terminal_name}).to_string();
+    let response = ureq::post(&format!("{api_url}/api/v1/activation/claim"))
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(12))
+        .send_string(&body)
+        .map_err(|error| format!("Não foi possível ativar este terminal: {error}"))?;
+    let claimed: ActivationClaimResponse = serde_json::from_reader(response.into_reader())
+        .map_err(|_| "Resposta de ativação inválida".to_string())?;
+    crate::sync::persist_credentials(
+        &state.db,
+        &crate::sync::TerminalCredentials {
+            tenant_id: claimed.tenant_id,
+            unit_id: claimed.unit_id,
+            terminal_id: claimed.terminal_id,
+            terminal_key: claimed.terminal_key,
+            api_url,
+        },
+    )?;
+    crate::license::import_token(&state.db, &claimed.license.to_string(), Some("activation"))?;
+    let _ = state.db.audit_license(
+        "terminal_activated",
+        Some("credencial de terminal persistida"),
+    );
+    Ok(crate::sync::activation_status(&state.db))
+}
+
+#[tauri::command]
 fn import_license(
     state: tauri::State<'_, Arc<AppState>>,
     path: String,
@@ -850,50 +925,16 @@ fn refresh_license(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<crate::license::LicenseStatus, String> {
     let current = crate::license::status(&state.db);
-    let value = |name: &str, dev: &str| {
-        std::env::var(name).unwrap_or_else(|_| {
-            if cfg!(debug_assertions) {
-                dev.into()
-            } else {
-                String::new()
-            }
-        })
-    };
-    let api = value("COMMERCECTRL_API_URL", "http://127.0.0.1:8088");
-    if api.is_empty() {
-        return Err("backend de licenciamento não configurado".into());
-    }
+    let credentials = crate::sync::credentials(&state.db).ok_or("terminal não ativado")?;
     let body = serde_json::json!({"installation_id": current.installation_id}).to_string();
-    let response = ureq::post(&format!("{api}/api/v1/licenses/renew"))
-        .set("Content-Type", "application/json")
-        .set(
-            "X-Tenant-Id",
-            &value(
-                "COMMERCECTRL_TENANT_ID",
-                "00000000-0000-0000-0000-000000000001",
-            ),
-        )
-        .set(
-            "X-Unit-Id",
-            &value(
-                "COMMERCECTRL_UNIT_ID",
-                "00000000-0000-0000-0000-000000000101",
-            ),
-        )
-        .set(
-            "X-Terminal-Id",
-            &value(
-                "COMMERCECTRL_TERMINAL_ID",
-                "00000000-0000-0000-0000-000000001001",
-            ),
-        )
-        .set(
-            "X-Terminal-Key",
-            &value("COMMERCECTRL_TERMINAL_KEY", "commercectrl-dev-key"),
-        )
-        .timeout(std::time::Duration::from_secs(8))
-        .send_string(&body)
-        .map_err(|e| format!("renovação de licença indisponível: {e}"))?;
+    let response = crate::sync::authenticated(
+        ureq::post(&format!("{}/api/v1/licenses/renew", credentials.api_url)),
+        &credentials,
+    )
+    .set("Content-Type", "application/json")
+    .timeout(std::time::Duration::from_secs(8))
+    .send_string(&body)
+    .map_err(|e| format!("renovação de licença indisponível: {e}"))?;
     let raw: serde_json::Value =
         serde_json::from_reader(response.into_reader()).map_err(|e| e.to_string())?;
     crate::license::import_token(&state.db, &raw.to_string(), Some("online"))
@@ -1896,6 +1937,8 @@ fn main() {
             license_status,
             import_license,
             scan_license_media,
+            activation_status,
+            claim_activation,
             refresh_license
         ])
         .on_window_event(|window, event| {

@@ -26,6 +26,7 @@ import type {
   UnitSalesReport,
   UserSession,
   LoginResult,
+  ActivationStatus,
 } from "./types";
 
 export async function loginEmployee(username:string,password:string):Promise<LoginResult>{return invoke("login_employee",{username,password})}
@@ -623,4 +624,9 @@ export async function importLicense(path: string): Promise<LicenseStatus> {
 export async function refreshLicense(): Promise<LicenseStatus> {
   if (inTauri()) return invoke("refresh_license");
   throw new Error("Renovação requer o aplicativo desktop");
+}
+export async function activationStatus(): Promise<ActivationStatus> { return inTauri() ? invoke("activation_status") : { activated: true }; }
+export async function claimActivation(code:string, terminalName:string, apiUrl?:string): Promise<ActivationStatus> {
+  if (!inTauri()) throw new Error("A ativação exige o aplicativo desktop");
+  return invoke("claim_activation", { request: { code, terminal_name: terminalName, api_url: apiUrl || null } });
 }

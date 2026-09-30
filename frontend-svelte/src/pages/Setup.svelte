@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { CheckCircle2, Circle, Database, ExternalLink, Github, ServerCog, ShieldCheck } from "@lucide/svelte";
+  import { CheckCircle2, Circle, Database, ExternalLink, GitBranch, ServerCog, ShieldCheck } from "@lucide/svelte";
   let { onBack }: { onBack: () => void } = $props();
   const steps = [
     {title:"Supabase",icon:Database,url:"https://supabase.com/dashboard/project/sqwpkwsjbbkylbdpjrlu",items:["Mantenha RLS ativo nas tabelas de negócio.","Valide os buckets product-images e desktop-releases.","Use no Render a URL do Connection Pooler, porta 6543 — não a URL direta do banco."]},
     {title:"Render",icon:ServerCog,url:"https://dashboard.render.com/",items:["Defina DATABASE_URL pelo Connection Pooler.","Configure PORT, SUPERADMIN_EMAIL e SUPERADMIN_PASSWORD.","Faça redeploy e confirme /health antes de liberar terminais."]},
-    {title:"GitHub",icon:Github,url:"https://github.com/leocalazans/adega_pro/settings/secrets/actions",items:["Desbloqueie Actions caso haja pendência na conta.","Cadastre as chaves do updater e as variáveis de produção como Secrets.","Rode Release Windows signed updater para publicar a primeira versão assinada."]},
+    {title:"GitHub",icon:GitBranch,url:"https://github.com/leocalazans/adega_pro/settings/secrets/actions",items:["Desbloqueie Actions caso haja pendência na conta.","Cadastre as chaves do updater e as variáveis de produção como Secrets.","Rode Release Windows signed updater para publicar a primeira versão assinada."]},
   ];
 </script>
 

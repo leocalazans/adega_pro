@@ -69,6 +69,10 @@ fn installation(db: &Db) -> Result<(String, i64), String> {
     Ok((id, installed_at))
 }
 
+pub fn installation_id(db: &Db) -> Result<String, String> {
+    installation(db).map(|(id, _)| id)
+}
+
 fn verifying_key() -> Result<VerifyingKey, String> {
     let configured = option_env!("COMMERCECTRL_LICENSE_PUBLIC_KEY_B64")
         .map(str::to_owned)
@@ -94,15 +98,19 @@ fn verifying_key() -> Result<VerifyingKey, String> {
     Err("aplicativo de produção sem chave pública de licenciamento".into())
 }
 
-fn verify_token(token: &SignedLicense, installation_id: &str) -> Result<(), String> {
+fn verify_token(db: &Db, token: &SignedLicense, installation_id: &str) -> Result<(), String> {
     if token.claims.installation_id != installation_id {
         return Err("licença pertence a outra instalação".into());
     }
-    let expected_unit = std::env::var("COMMERCECTRL_UNIT_ID").unwrap_or_default();
+    let expected_unit = crate::sync::credentials(db)
+        .map(|value| value.unit_id)
+        .unwrap_or_default();
     if !expected_unit.is_empty() && token.claims.unit_id != expected_unit {
         return Err("licença pertence a outra unidade".into());
     }
-    let expected_tenant = std::env::var("COMMERCECTRL_TENANT_ID").unwrap_or_default();
+    let expected_tenant = crate::sync::credentials(db)
+        .map(|value| value.tenant_id)
+        .unwrap_or_default();
     if !expected_tenant.is_empty() && token.claims.tenant_id != expected_tenant {
         return Err("licença pertence a outra empresa".into());
     }
@@ -195,7 +203,7 @@ pub fn status(db: &Db) -> LicenseStatus {
             }
         }
     };
-    if let Err(error) = verify_token(&token, &installation_id) {
+    if let Err(error) = verify_token(db, &token, &installation_id) {
         return LicenseStatus {
             allowed_to_sell: false,
             mode: "restricted".into(),
@@ -232,7 +240,7 @@ pub fn import_token(db: &Db, raw: &str, source: Option<&str>) -> Result<LicenseS
     let token: SignedLicense = serde_json::from_str(raw.trim_start_matches('\u{feff}'))
         .map_err(|e| format!("arquivo de licença inválido: {e}"))?;
     let (installation_id, _) = installation(db)?;
-    verify_token(&token, &installation_id)?;
+    verify_token(db, &token, &installation_id)?;
     let canonical = serde_json::to_string(&token).map_err(|e| e.to_string())?;
     db.set_setting(TOKEN_SETTING, &canonical)
         .map_err(|e| e.to_string())?;
@@ -282,10 +290,11 @@ mod tests {
             claims: claims.clone(),
             signature: STANDARD.encode(key.sign(&payload).to_bytes()),
         };
-        assert!(verify_token(&token, "install").is_ok());
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        assert!(verify_token(&db, &token, "install").is_ok());
         let mut changed = token;
         changed.claims.grace_until = 30;
-        assert!(verify_token(&changed, "install").is_err());
+        assert!(verify_token(&db, &changed, "install").is_err());
     }
 
     fn signed(claims: LicenseClaims) -> String {

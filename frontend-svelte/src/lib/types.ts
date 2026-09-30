@@ -59,3 +59,4 @@ export interface CloudPaymentIntent { id: string; provider: string; provider_id?
 export interface KioskAdminStatus { configured: boolean }
 export interface UserSession { user_id:number; employee_id?:number|null; display_name:string; username:string; role:string; permissions:string[] }
 export interface LoginResult { session:UserSession; must_change_password:boolean }
+export interface ActivationStatus { activated:boolean; api_url?:string|null }

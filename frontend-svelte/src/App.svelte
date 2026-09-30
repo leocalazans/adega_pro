@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { Menu, Moon, Sun, PanelLeftClose, PanelLeftOpen, CircleUserRound, Wifi, WifiOff, LockKeyhole } from "@lucide/svelte";
   import { routes } from "./lib/navigation";
-  import { cloudOwnerBranding, configureKioskAdminPin, currentSession, exitKioskAsAdmin, inTauri, kioskAdminStatus, logoutEmployee, syncStatus } from "./lib/tauri";
+  import { activationStatus, cloudOwnerBranding, configureKioskAdminPin, currentSession, exitKioskAsAdmin, inTauri, kioskAdminStatus, logoutEmployee, syncStatus } from "./lib/tauri";
   import type { UserSession } from "./lib/types";
   import Dashboard from "./pages/Dashboard.svelte";
   import Pos from "./pages/Pos.svelte";
@@ -28,6 +28,7 @@
   import DownloadPage from "./pages/Download.svelte";
   import Setup from "./pages/Setup.svelte";
   import Privacy from "./pages/Privacy.svelte";
+  import Activation from "./pages/Activation.svelte";
 
   let path = $state(window.location.pathname);
   let sidebarOpen = $state(false);
@@ -47,6 +48,9 @@
   let clientName = $state("Sua loja");
   let clientLogo = $state("");
   let session = $state<UserSession|null>(null);
+  let activationChecked = $state(false);
+  let terminalActivated = $state(false);
+  let activationApiUrl = $state("");
 
   const navigate = (href: string) => {
     history.pushState({}, "", href);
@@ -56,7 +60,8 @@
 
   onMount(() => {
     isDesktop = inTauri();
-    if(isDesktop) currentSession().then(value=>session=value).catch(()=>session=null);
+    if(isDesktop) activationStatus().then(value=>{terminalActivated=value.activated;activationApiUrl=value.api_url||"";if(value.activated)return currentSession().then(value=>session=value).catch(()=>session=null)}).catch(()=>{}).finally(()=>activationChecked=true);
+    else activationChecked=true;
     sidebarCollapsed = window.localStorage.getItem("commercectrl.sidebar.collapsed") === "true";
     darkTheme = window.localStorage.getItem("commercectrl.theme") === "dark";
     document.documentElement.classList.toggle("dark", darkTheme);
@@ -129,7 +134,11 @@
   async function logout(){await logoutEmployee();session=null;path="/";history.replaceState({},"","/")}
 </script>
 
-{#if !isDesktop && !session && (path === "/" || path === "/signup")}
+{#if isDesktop && !activationChecked}
+  <main></main>
+{:else if isDesktop && !terminalActivated}
+  <Activation apiUrl={activationApiUrl} onActivated={() => { terminalActivated=true; }}/>
+{:else if !isDesktop && !session && (path === "/" || path === "/signup")}
   <SaasLanding onStart={() => navigate("/onboarding")} onLogin={() => navigate("/login")} />
 {:else if path === "/onboarding"}
   <Onboarding onDone={() => navigate("/download")} />
