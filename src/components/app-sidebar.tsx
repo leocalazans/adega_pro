@@ -33,7 +33,7 @@ export function AppSidebar() {
         <Link href="/" className="flex items-center gap-2">
           <Wine className="h-8 w-8 text-primary" />
           <span className="font-headline text-xl font-semibold text-primary group-data-[state=collapsed]:hidden">
-            ADEGA_PRO
+            CommerceCTRL
           </span>
         </Link>
       </SidebarHeader>

@@ -2,6 +2,12 @@
 
 # dependencies
 /node_modules
+/frontend-svelte/node_modules/
+/frontend-svelte/dist/
+/frontend-svelte/coverage/
+/core-tests/target/
+/backend/target/
+/src-tauri/target/
 /.pnp
 .pnp.*
 .yarn/*
@@ -23,9 +29,11 @@
 # misc
 .DS_Store
 *.pem
+/src-tauri/.tauri/*.key
 
 # debug
 npm-debug.log*
+*.log
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
@@ -39,6 +47,7 @@ next-env.d.ts
 
 .genkit/*
 .env*
+!.env.example
 
 # firebase
 firebase-debug.log

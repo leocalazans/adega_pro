@@ -9,8 +9,8 @@ import { AppShell } from "@/components/app-shell";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "ADEGA_PRO Lite",
-  description: "Gestão Inteligente para o Comércio de Vizinhança",
+  title: "CommerceCTRL",
+  description: "Gestão Inteligente para o Comércio de Vizinhança — PDV Offline-first",
 };
 
 export default function RootLayout({

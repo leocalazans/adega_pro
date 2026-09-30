@@ -1,0 +1,53 @@
+name: commercectrl
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: commercectrl
+      POSTGRES_USER: commercectrl
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-commercectrl_local_dev}
+    ports:
+      - "54329:5432"
+    volumes:
+      - commercectrl_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commercectrl -d commercectrl"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgres://commercectrl:${POSTGRES_PASSWORD:-commercectrl_local_dev}@postgres:5432/commercectrl
+      BIND_ADDR: 0.0.0.0:8080
+      RUST_LOG: commercectrl_backend=info,tower_http=info
+      BOOTSTRAP_TENANT_ID: 00000000-0000-0000-0000-000000000001
+      BOOTSTRAP_UNIT_ID: 00000000-0000-0000-0000-000000000101
+      BOOTSTRAP_TERMINAL_ID: 00000000-0000-0000-0000-000000001001
+      BOOTSTRAP_TERMINAL_KEY: ${COMMERCECTRL_TERMINAL_KEY:-commercectrl-dev-key}
+      # Desenvolvimento somente. Produção deve fornecer um segredo exclusivo do proprietário.
+      BOOTSTRAP_OWNER_KEY: ${COMMERCECTRL_OWNER_KEY:-commercectrl-owner-dev-key}
+      BOOTSTRAP_OWNER_EMAIL: ${COMMERCECTRL_OWNER_EMAIL:-owner@local.invalid}
+      # Cliente de demonstração: um único mercado com quatro unidades em Mogi das Cruzes.
+      BOOTSTRAP_TENANT_NAME: Mercadinho Martins
+      BOOTSTRAP_UNIT_NAME: Matriz Centro
+      ASAAS_BASE_URL: ${ASAAS_BASE_URL:-https://api-sandbox.asaas.com/v3}
+      ASAAS_API_KEY: ${ASAAS_API_KEY:-}
+      ASAAS_CUSTOMER_ID: ${ASAAS_CUSTOMER_ID:-}
+      ASAAS_WEBHOOK_TOKEN: ${ASAAS_WEBHOOK_TOKEN:-}
+      LICENSE_ADMIN_KEY: ${LICENSE_ADMIN_KEY:-commercectrl-license-dev-change-me}
+      # Chave fixa apenas para desenvolvimento local; produção deve sobrescrever.
+      LICENSE_SIGNING_KEY_B64: ${LICENSE_SIGNING_KEY_B64:-BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=}
+    ports:
+      - "8088:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  commercectrl_postgres:

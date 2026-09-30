@@ -1,4 +1,4 @@
-# **App Name**: ADEGA_PRO Lite
+# **App Name**: CommerceCTRL
 
 ## Core Features:
 

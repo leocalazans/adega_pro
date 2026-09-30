@@ -1,7 +1,7 @@
 {
-  "name": "ADEGA_PRO Lite",
-  "short_name": "ADEGA_PRO",
-  "description": "Gestão Inteligente para o Comércio de Vizinhança",
+  "name": "CommerceCTRL",
+  "short_name": "CommerceCTRL",
+  "description": "Gestão Inteligente para o Comércio de Vizinhança — PDV Offline-first",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
