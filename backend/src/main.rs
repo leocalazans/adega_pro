@@ -97,6 +97,19 @@ struct PlatformActivationCodeCreated {
     expires_at: chrono::DateTime<chrono::Utc>,
     max_uses: i32,
 }
+#[derive(Debug, Deserialize)]
+struct ActivationClaimRequest {
+    code: String,
+    installation_id: String,
+    terminal_name: String,
+}
+#[derive(Debug, Serialize)]
+struct ActivationClaimed {
+    tenant_id: Uuid,
+    unit_id: Uuid,
+    terminal_id: Uuid,
+    terminal_key: String,
+}
 fn default_plan() -> String {
     "profissional".into()
 }
@@ -990,6 +1003,55 @@ async fn platform_revoke_activation_code(
     ))
 }
 
+async fn claim_activation_code(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ActivationClaimRequest>,
+) -> Result<Json<ActivationClaimed>, ApiError> {
+    let code = request.code.trim().to_uppercase();
+    if !code.starts_with("CC-")
+        || code.len() > 64
+        || request.installation_id.trim().is_empty()
+        || request.terminal_name.trim().len() < 2
+        || request.terminal_name.trim().len() > 120
+    {
+        return Err(error(StatusCode::BAD_REQUEST, "ativação inválida"));
+    }
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    let row=sqlx::query_as::<_,(Uuid,Uuid)>("SELECT tenant_id,unit_id FROM platform_activation_codes WHERE code_hash=$1 AND revoked_at IS NULL AND expires_at>now() AND uses<max_uses FOR UPDATE").bind(hash_key(&code)).fetch_optional(&mut *tx).await.map_err(internal)?.ok_or_else(||error(StatusCode::UNAUTHORIZED,"código inválido ou expirado"))?;
+    let allowed=sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM tenant_subscriptions WHERE tenant_id=$1 AND status IN ('trial','active') AND (current_period_ends_at IS NULL OR current_period_ends_at>now()))").bind(row.0).fetch_one(&mut *tx).await.map_err(internal)?;
+    if !allowed {
+        return Err(error(
+            StatusCode::PAYMENT_REQUIRED,
+            "assinatura não permite ativação",
+        ));
+    }
+    let terminal_id = Uuid::new_v4();
+    let terminal_key = format!("ct_{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO terminals(id,tenant_id,unit_id,name,api_key_hash) VALUES($1,$2,$3,$4,$5)",
+    )
+    .bind(terminal_id)
+    .bind(row.0)
+    .bind(row.1)
+    .bind(request.terminal_name.trim())
+    .bind(hash_key(&terminal_key))
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?;
+    sqlx::query("UPDATE platform_activation_codes SET uses=uses+1 WHERE code_hash=$1")
+        .bind(hash_key(&code))
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
+    Ok(Json(ActivationClaimed {
+        tenant_id: row.0,
+        unit_id: row.1,
+        terminal_id,
+        terminal_key,
+    }))
+}
+
 impl FromRequestParts<Arc<AppState>> for TerminalAuth {
     type Rejection = ApiError;
 
@@ -1774,6 +1836,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/v1/platform/activation-codes/{code_id}/revoke",
             post(platform_revoke_activation_code),
         )
+        .route("/api/v1/activation/claim", post(claim_activation_code))
         .route("/api/v1/sync/outbox", post(ingest_event))
         .route("/api/v1/sync/products", get(products))
         .route(
