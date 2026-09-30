@@ -649,6 +649,27 @@ fn password_hash(value: &str) -> Result<String, ApiError> {
         .map_err(internal)
 }
 
+async fn platform_audit(
+    pool: &PgPool,
+    admin_id: Uuid,
+    action: &str,
+    tenant_id: Option<Uuid>,
+    metadata: Value,
+) {
+    if let Err(cause) = sqlx::query(
+        "INSERT INTO platform_audit_events(admin_id,action,tenant_id,metadata) VALUES($1,$2,$3,$4)",
+    )
+    .bind(admin_id)
+    .bind(action)
+    .bind(tenant_id)
+    .bind(metadata)
+    .execute(pool)
+    .await
+    {
+        warn!(?cause, "falha ao gravar auditoria da plataforma");
+    }
+}
+
 fn platform_session_cookie(token: &str) -> Result<HeaderValue, ApiError> {
     format!(
         "__Host-commercectrl_session={token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=604800"
@@ -822,6 +843,14 @@ async fn platform_create_tenant(
         .map_err(internal)?;
     sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at) VALUES($1,$2,$3,$4,$4)").bind(tenant_id).bind(&request.plan).bind(if request.trial_days>0{"trial"}else{"active"}).bind(trial_ends_at).execute(&mut *tx).await.map_err(internal)?;
     tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.created",
+        Some(tenant_id),
+        serde_json::json!({"plan":request.plan,"trial_days":request.trial_days,"unit_id":unit_id}),
+    )
+    .await;
     info!(admin=%auth.email,tenant=%tenant_id,"tenant provisionado pela plataforma");
     Ok(Json(PlatformTenantCreated {
         tenant_id,
@@ -861,6 +890,7 @@ async fn platform_create_activation_code(
     let activation_id = Uuid::new_v4();
     let expires_at = chrono::Utc::now() + chrono::Duration::days(request.valid_days);
     sqlx::query("INSERT INTO platform_activation_codes(id,tenant_id,unit_id,code_hash,expires_at,max_uses,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(activation_id).bind(tenant_id).bind(unit_id).bind(hash_key(&code)).bind(expires_at).bind(request.max_uses).bind(auth.admin_id).execute(&state.db).await.map_err(internal)?;
+    platform_audit(&state.db, auth.admin_id, "activation_code.created", Some(tenant_id), serde_json::json!({"activation_code_id":activation_id,"unit_id":unit_id,"valid_days":request.valid_days,"max_uses":request.max_uses})).await;
     Ok(Json(PlatformActivationCodeCreated {
         id: activation_id,
         code,
@@ -890,6 +920,14 @@ async fn platform_suspend_tenant(
         .map_err(internal)?;
     sqlx::query("UPDATE platform_activation_codes SET revoked_at=now() WHERE tenant_id=$1 AND revoked_at IS NULL").bind(tenant_id).execute(&mut *tx).await.map_err(internal)?;
     tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.suspended",
+        Some(tenant_id),
+        serde_json::json!({}),
+    )
+    .await;
     info!(admin=%auth.email,tenant=%tenant_id,"tenant suspenso pela plataforma");
     Ok(Json(
         serde_json::json!({"tenant_id":tenant_id,"status":"suspended"}),
@@ -909,6 +947,14 @@ async fn platform_restore_tenant(
             "tenant não está suspenso ou não foi encontrado",
         ));
     }
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.restored",
+        Some(tenant_id),
+        serde_json::json!({"terminals_require_reactivation":true}),
+    )
+    .await;
     // Terminais permanecem bloqueados até a reativação consciente no painel: evita
     // reativar uma máquina perdida somente por restaurar a assinatura.
     info!(admin=%auth.email,tenant=%tenant_id,"tenant reativado pela plataforma");
@@ -930,6 +976,14 @@ async fn platform_revoke_activation_code(
             "código não encontrado, já utilizado ou já revogado",
         ));
     }
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "activation_code.revoked",
+        None,
+        serde_json::json!({"activation_code_id":code_id}),
+    )
+    .await;
     info!(admin=%auth.email,activation_code=%code_id,"código de ativação revogado");
     Ok(Json(
         serde_json::json!({"activation_code_id":code_id,"status":"revoked"}),

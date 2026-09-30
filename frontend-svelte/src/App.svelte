@@ -27,6 +27,7 @@
   import SuperAdmin from "./pages/SuperAdmin.svelte";
   import DownloadPage from "./pages/Download.svelte";
   import Setup from "./pages/Setup.svelte";
+  import Privacy from "./pages/Privacy.svelte";
 
   let path = $state(window.location.pathname);
   let sidebarOpen = $state(false);
@@ -136,6 +137,8 @@
   <DownloadPage onBack={() => navigate("/")} />
 {:else if !isDesktop && path === "/setup"}
   <Setup onBack={() => navigate("/")} />
+{:else if !isDesktop && path === "/privacidade"}
+  <Privacy onBack={() => navigate("/")} />
 {:else if path === "/display"}
   <Display />
 {:else if !session}
