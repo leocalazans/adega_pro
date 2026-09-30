@@ -15,6 +15,13 @@ A service-role jamais deve ser colocada no frontend ou no executável.
 
 ## Publicação local assistida
 
+Se o endpoint de licença responder `emissor de licença não configurado`, execute
+`scripts\generate-license-key.cmd` localmente e cadastre a linha
+`LICENSE_SIGNING_KEY_B64` como variável secreta do serviço no Render. Nunca
+cadastre essa chave no Supabase, no frontend ou no Git. Após o deploy, o
+endpoint público passa a fornecer apenas a chave verificadora necessária ao
+instalador.
+
 Quando o GitHub Actions não estiver disponível, execute `scripts\release-local.cmd`
 em um CMD. Ele valida que a chave pública configurada no Tauri corresponde à chave
 privada local, pede a senha dessa chave e a Service Role sem exibi-las, gera o
