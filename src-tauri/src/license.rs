@@ -102,14 +102,16 @@ fn verify_token(db: &Db, token: &SignedLicense, installation_id: &str) -> Result
     if token.claims.installation_id != installation_id {
         return Err("licença pertence a outra instalação".into());
     }
-    let expected_unit = crate::sync::credentials(db)
-        .map(|value| value.unit_id)
+    let expected_unit = db
+        .get_setting("activation.unit_id")
+        .map_err(|e| e.to_string())?
         .unwrap_or_default();
     if !expected_unit.is_empty() && token.claims.unit_id != expected_unit {
         return Err("licença pertence a outra unidade".into());
     }
-    let expected_tenant = crate::sync::credentials(db)
-        .map(|value| value.tenant_id)
+    let expected_tenant = db
+        .get_setting("activation.tenant_id")
+        .map_err(|e| e.to_string())?
         .unwrap_or_default();
     if !expected_tenant.is_empty() && token.claims.tenant_id != expected_tenant {
         return Err("licença pertence a outra empresa".into());

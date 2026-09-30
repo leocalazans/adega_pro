@@ -868,6 +868,24 @@ async fn platform_tenants(
     Ok(Json(tenants))
 }
 
+async fn platform_tenant_detail(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let unit_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM units WHERE tenant_id=$1 ORDER BY created_at ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "unidade não encontrada"))?;
+    Ok(Json(
+        serde_json::json!({"tenant_id":tenant_id,"unit_id":unit_id}),
+    ))
+}
+
 async fn commercial_lead(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CommercialLeadRequest>,
@@ -1960,6 +1978,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/v1/platform/tenants", get(platform_tenants))
         .route("/api/v1/platform/tenants", post(platform_create_tenant))
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}",
+            get(platform_tenant_detail),
+        )
         .route(
             "/api/v1/platform/tenants/{tenant_id}/units/{unit_id}/activation-codes",
             post(platform_create_activation_code),

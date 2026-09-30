@@ -2,7 +2,8 @@
 
 ## Antes de sair
 
-- Levar um notebook com acesso ao painel SuperAdmin, o instalador `CommerceCTRL PDV 0.1.1` e acesso à internet.
+- Provisionar a loja pelo painel em `/superadmin` ou executar `scripts\provision-martins.cmd` em um CMD. O script pede a senha do SuperAdmin de forma oculta, cria a loja e unidade inicial e mostra um código de ativação de uso único apenas uma vez.
+- Levar um notebook com acesso ao painel SuperAdmin, o instalador `CommerceCTRL PDV 0.1.2` e acesso à internet.
 - Criar um código de ativação de uso único por terminal no painel; registrar a unidade e o nome físico de cada caixa antes de entregar o código.
 - Confirmar que o backend responde `GET /health` e que o terminal usa a URL oficial do backend.
 - Não usar o usuário de demonstração como credencial definitiva. No primeiro login local, trocar a senha temporária.
@@ -14,6 +15,7 @@
 3. Cadastrar ou sincronizar dois produtos reais de teste, um com EAN impresso e outro por pesquisa.
 4. Abrir caixa, registrar uma venda de valor baixo e imprimir somente o **COMPROVANTE DE VENDA — NÃO É DOCUMENTO FISCAL**.
 5. Desconectar a rede, registrar outra venda, reconectar e confirmar que a outbox foi esvaziada.
+6. Fechar o caixa, reiniciar o PDV e confirmar que a venda, o estoque e o fechamento continuam visíveis. Esse é o teste de recuperação local após backup.
 
 ## Scanner de código de barras
 

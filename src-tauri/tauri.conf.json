@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CommerceCTRL PDV",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "br.com.commercectrl.pdv",
   "build": {
     "beforeDevCommand": "npm --prefix frontend-svelte run dev",
@@ -47,7 +47,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZFQzNCQUQwRTAwM0Q1Q0QKUldUTjFRUGcwTHJEL3F0WUg4R3IrZTQwYWV3bTMxVXpqQys1QkdBYWFhQzE4WVB4eEVoc000NlcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYwMDkzNkZDNjYyMTc0NjQKUldSa2RDRm0vRFlKOERFek1RY2FkYThjS2hBM1p5bDFyOEdBWkZDSm5uUlpxQ1FCTkZFVFh6ODEK",
       "endpoints": ["https://sqwpkwsjbbkylbdpjrlu.supabase.co/storage/v1/object/public/desktop-releases/latest.json"],
       "windows": { "installMode": "passive" }
     }

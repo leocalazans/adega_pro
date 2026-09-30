@@ -2416,6 +2416,28 @@ mod tests {
             std::env::temp_dir().join(format!("commercectrl-backup-{}.db", uuid::Uuid::new_v4()));
         db.backup_to(&backup).unwrap();
         Db::validate_backup(&backup).unwrap();
+        db.set_user_password(admin.id, "alterado-depois-do-backup", false)
+            .unwrap();
+        let restored = Db::open(&backup).unwrap();
+        assert_eq!(
+            restored
+                .auth_user("admin")
+                .unwrap()
+                .unwrap()
+                .password_hash
+                .as_deref(),
+            Some("hash-teste")
+        );
+        assert_eq!(
+            restored
+                .search_by_ean("78900001")
+                .unwrap()
+                .unwrap()
+                .image_url
+                .as_deref(),
+            Some("https://cdn.example/produto.webp")
+        );
+        drop(restored);
         drop(db);
         remove_database(&path);
         remove_database(&backup);

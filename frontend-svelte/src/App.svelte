@@ -153,6 +153,8 @@
   <Privacy onBack={() => navigate("/")} />
 {:else if !isDesktop && path === "/contato"}
   <Contact onBack={() => navigate("/")} />
+{:else if !isDesktop && path === "/superadmin"}
+  <SuperAdmin />
 {:else if path === "/display"}
   <Display />
 {:else if !isDesktop && import.meta.env.DEV && path === "/pos"}
