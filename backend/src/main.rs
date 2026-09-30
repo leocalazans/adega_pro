@@ -604,6 +604,18 @@ fn sign_license(claims: LicenseClaims) -> Result<SignedLicense, ApiError> {
     })
 }
 
+// A chave verificadora é pública por definição: o PDV precisa incorporá-la para
+// validar licenças offline. Expor somente este valor permite que o processo de
+// release use exatamente a chave do backend sem revelar a chave de assinatura.
+async fn license_public_key() -> Result<Json<Value>, ApiError> {
+    use base64::Engine;
+    let public_key_b64 =
+        base64::engine::general_purpose::STANDARD.encode(signing_key()?.verifying_key().to_bytes());
+    Ok(Json(
+        serde_json::json!({ "public_key_b64": public_key_b64 }),
+    ))
+}
+
 fn require_license_admin(headers: &HeaderMap) -> Result<(), ApiError> {
     let expected = env::var("LICENSE_ADMIN_KEY").unwrap_or_else(|_| {
         if cfg!(debug_assertions) {
@@ -1964,6 +1976,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(AppState { db: pool });
     let app = Router::new()
         .route("/health", get(health))
+        .route("/api/v1/public/license-key", get(license_public_key))
         .route("/api/v1/platform/auth/login", post(platform_login))
         .route("/api/v1/platform/auth/logout", post(platform_logout))
         .route("/api/v1/platform/me", get(platform_me))

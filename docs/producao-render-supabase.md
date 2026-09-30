@@ -19,8 +19,9 @@ Quando o GitHub Actions não estiver disponível, execute `scripts\release-local
 em um CMD. Ele valida que a chave pública configurada no Tauri corresponde à chave
 privada local, pede a senha dessa chave e a Service Role sem exibi-las, gera o
 instalador assinado pelo updater e publica o instalador, a assinatura e o
-`latest.json`. A chave pública de licenciamento é necessária na compilação; ela
-não é a chave do atualizador e não substitui a chave privada do backend.
+`latest.json`. A chave pública de licenciamento é obtida automaticamente do
+backend; ela não é a chave do atualizador e não substitui a chave privada do
+backend.
 
 O `.sig` e o `latest.json` atendem à atualização automática do Tauri. Eles não
 substituem uma assinatura Authenticode: para remover o aviso de reputação do

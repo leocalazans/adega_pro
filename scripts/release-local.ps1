@@ -19,7 +19,12 @@ try {
   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD=Read-PrivateValue 'Senha da chave privada (Enter se vazia)'
   $env:COMMERCECTRL_API_URL='https://adega-pro-sndh.onrender.com'
   if(-not $env:COMMERCECTRL_LICENSE_PUBLIC_KEY_B64){
-    $env:COMMERCECTRL_LICENSE_PUBLIC_KEY_B64=Read-Host 'Chave PUBLICA de licenciamento do backend (base64, diferente da chave updater)'
+    try {
+      $env:COMMERCECTRL_LICENSE_PUBLIC_KEY_B64=(Invoke-RestMethod "$env:COMMERCECTRL_API_URL/api/v1/public/license-key" -TimeoutSec 30).public_key_b64
+      Write-Output 'Chave pública de licenciamento obtida do backend.'
+    } catch {
+      $env:COMMERCECTRL_LICENSE_PUBLIC_KEY_B64=Read-Host 'Chave PUBLICA de licenciamento do backend (base64, diferente da chave updater)'
+    }
   }
   if([Convert]::FromBase64String($env:COMMERCECTRL_LICENSE_PUBLIC_KEY_B64).Length -ne 32){throw 'Chave pública de licenciamento inválida'}
   & (Join-Path $PSScriptRoot 'build-windows.ps1')
