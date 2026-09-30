@@ -26,6 +26,7 @@
   import Onboarding from "./pages/Onboarding.svelte";
   import SuperAdmin from "./pages/SuperAdmin.svelte";
   import DownloadPage from "./pages/Download.svelte";
+  import Setup from "./pages/Setup.svelte";
 
   let path = $state(window.location.pathname);
   let sidebarOpen = $state(false);
@@ -133,6 +134,8 @@
   <Onboarding onDone={() => navigate("/download")} />
 {:else if !isDesktop && path === "/download"}
   <DownloadPage onBack={() => navigate("/")} />
+{:else if !isDesktop && path === "/setup"}
+  <Setup onBack={() => navigate("/")} />
 {:else if path === "/display"}
   <Display />
 {:else if !session}
