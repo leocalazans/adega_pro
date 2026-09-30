@@ -28,6 +28,7 @@
   import DownloadPage from "./pages/Download.svelte";
   import Setup from "./pages/Setup.svelte";
   import Privacy from "./pages/Privacy.svelte";
+  import Contact from "./pages/Contact.svelte";
   import Activation from "./pages/Activation.svelte";
 
   let path = $state(window.location.pathname);
@@ -148,6 +149,8 @@
   <Setup onBack={() => navigate("/")} />
 {:else if !isDesktop && path === "/privacidade"}
   <Privacy onBack={() => navigate("/")} />
+{:else if !isDesktop && path === "/contato"}
+  <Contact onBack={() => navigate("/")} />
 {:else if path === "/display"}
   <Display />
 {:else if !session}
