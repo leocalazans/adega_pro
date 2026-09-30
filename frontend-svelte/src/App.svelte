@@ -153,6 +153,8 @@
   <Contact onBack={() => navigate("/")} />
 {:else if path === "/display"}
   <Display />
+{:else if !isDesktop && import.meta.env.DEV && path === "/pos"}
+  <Pos />
 {:else if !session}
   <Login storeName={isDesktop ? clientName : "CommerceCTRL"} onLogin={loggedIn}/>
 {:else}
