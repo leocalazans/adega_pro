@@ -68,6 +68,45 @@ struct PlatformTenantOut {
 }
 
 #[derive(Debug, Deserialize)]
+struct PlatformTenantCreateRequest {
+    name: String,
+    unit_name: String,
+    #[serde(default = "default_plan")]
+    plan: String,
+    #[serde(default)]
+    trial_days: i64,
+}
+#[derive(Debug, Serialize)]
+struct PlatformTenantCreated {
+    tenant_id: Uuid,
+    unit_id: Uuid,
+    name: String,
+    trial_ends_at: chrono::DateTime<chrono::Utc>,
+}
+#[derive(Debug, Deserialize)]
+struct PlatformActivationCodeRequest {
+    #[serde(default = "default_activation_days")]
+    valid_days: i64,
+    #[serde(default = "default_activation_uses")]
+    max_uses: i32,
+}
+#[derive(Debug, Serialize)]
+struct PlatformActivationCodeCreated {
+    code: String,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    max_uses: i32,
+}
+fn default_plan() -> String {
+    "profissional".into()
+}
+fn default_activation_days() -> i64 {
+    7
+}
+fn default_activation_uses() -> i32 {
+    1
+}
+
+#[derive(Debug, Deserialize)]
 struct CloudEventIn {
     uuid: Uuid,
     entity: String,
@@ -745,6 +784,86 @@ async fn platform_tenants(
     .await
     .map_err(internal)?;
     Ok(Json(tenants))
+}
+
+async fn platform_create_tenant(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Json(request): Json<PlatformTenantCreateRequest>,
+) -> Result<Json<PlatformTenantCreated>, ApiError> {
+    let name = request.name.trim();
+    let unit_name = request.unit_name.trim();
+    if name.len() < 2
+        || name.len() > 120
+        || unit_name.len() < 2
+        || unit_name.len() > 120
+        || !matches!(request.plan.as_str(), "essencial" | "profissional" | "rede")
+        || !(0..=365).contains(&request.trial_days)
+    {
+        return Err(error(StatusCode::BAD_REQUEST, "dados do tenant inválidos"));
+    }
+    let tenant_id = Uuid::new_v4();
+    let unit_id = Uuid::new_v4();
+    let trial_ends_at = chrono::Utc::now() + chrono::Duration::days(request.trial_days);
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    sqlx::query("INSERT INTO tenants(id,name) VALUES($1,$2)")
+        .bind(tenant_id)
+        .bind(name)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("INSERT INTO units(id,tenant_id,name,code) VALUES($1,$2,$3,'MATRIZ')")
+        .bind(unit_id)
+        .bind(tenant_id)
+        .bind(unit_name)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at) VALUES($1,$2,$3,$4,$4)").bind(tenant_id).bind(&request.plan).bind(if request.trial_days>0{"trial"}else{"active"}).bind(trial_ends_at).execute(&mut *tx).await.map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
+    info!(admin=%auth.email,tenant=%tenant_id,"tenant provisionado pela plataforma");
+    Ok(Json(PlatformTenantCreated {
+        tenant_id,
+        unit_id,
+        name: name.into(),
+        trial_ends_at,
+    }))
+}
+
+async fn platform_create_activation_code(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path((tenant_id, unit_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<PlatformActivationCodeRequest>,
+) -> Result<Json<PlatformActivationCodeCreated>, ApiError> {
+    if !(1..=30).contains(&request.valid_days) || !(1..=50).contains(&request.max_uses) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "validade ou quantidade de ativações inválida",
+        ));
+    }
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM units WHERE tenant_id=$1 AND id=$2)",
+    )
+    .bind(tenant_id)
+    .bind(unit_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    if !exists {
+        return Err(error(StatusCode::NOT_FOUND, "unidade não encontrada"));
+    }
+    let code = format!(
+        "CC-{}",
+        Uuid::new_v4().simple().to_string()[..12].to_uppercase()
+    );
+    let expires_at = chrono::Utc::now() + chrono::Duration::days(request.valid_days);
+    sqlx::query("INSERT INTO platform_activation_codes(id,tenant_id,unit_id,code_hash,expires_at,max_uses,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(Uuid::new_v4()).bind(tenant_id).bind(unit_id).bind(hash_key(&code)).bind(expires_at).bind(request.max_uses).bind(auth.admin_id).execute(&state.db).await.map_err(internal)?;
+    Ok(Json(PlatformActivationCodeCreated {
+        code,
+        expires_at,
+        max_uses: request.max_uses,
+    }))
 }
 
 impl FromRequestParts<Arc<AppState>> for TerminalAuth {
@@ -1514,6 +1633,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/platform/auth/logout", post(platform_logout))
         .route("/api/v1/platform/me", get(platform_me))
         .route("/api/v1/platform/tenants", get(platform_tenants))
+        .route("/api/v1/platform/tenants", post(platform_create_tenant))
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/units/{unit_id}/activation-codes",
+            post(platform_create_activation_code),
+        )
         .route("/api/v1/sync/outbox", post(ingest_event))
         .route("/api/v1/sync/products", get(products))
         .route(
