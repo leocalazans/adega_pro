@@ -9,7 +9,7 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["svelte"]
+    "types": ["svelte", "vite/client"]
   },
   "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"]
 }

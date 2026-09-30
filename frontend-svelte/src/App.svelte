@@ -7,6 +7,8 @@
   import type { UserSession } from "./lib/types";
   import Dashboard from "./pages/Dashboard.svelte";
   import Pos from "./pages/Pos.svelte";
+  import Pos2 from "./pages/Pos2.svelte";
+  import Pos3Online from "./pages/Pos3Online.svelte";
   import Products from "./pages/Products.svelte";
   import Restock from "./pages/Restock.svelte";
   import CashClosing from "./pages/CashClosing.svelte";
@@ -155,6 +157,10 @@
   <Display />
 {:else if !isDesktop && import.meta.env.DEV && path === "/pos"}
   <Pos />
+{:else if !isDesktop && import.meta.env.DEV && path === "/pos2"}
+  <Pos2 />
+{:else if !isDesktop && path === "/pos3-online"}
+  <Pos3Online />
 {:else if !session}
   <Login storeName={isDesktop ? clientName : "CommerceCTRL"} onLogin={loggedIn}/>
 {:else}

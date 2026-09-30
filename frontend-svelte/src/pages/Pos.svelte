@@ -12,12 +12,12 @@
     { id: "mercearia", label: "Mercearia", icon: "🥫" }, { id: "limpeza", label: "Limpeza", icon: "🧽" }, { id: "outros", label: "Outros", icon: "🛒" },
   ];
   const previewProducts: Product[] = [
-    { ean:"78900001",part_number:"BEB-001",description:"Cerveja Pilsen 350 ml",brand:"Commerce",price_brl_cents:550,stock_qty:42,min_stock:10,active:true },
-    { ean:"78900002",part_number:"ADE-002",description:"Vinho Tinto Suave",brand:"Adega",price_brl_cents:3000,stock_qty:18,min_stock:5,active:true },
-    { ean:"78900003",part_number:"MER-003",description:"Arroz Tipo 1 · 5 kg",brand:"Mercado",price_brl_cents:2890,stock_qty:24,min_stock:8,active:true },
-    { ean:"78900004",part_number:"BEB-004",description:"Água Tônica",brand:"Fresh",price_brl_cents:500,stock_qty:9,min_stock:12,active:true },
-    { ean:"78900005",part_number:"ADE-005",description:"Whisky 12 Anos",brand:"Reserva",price_brl_cents:12000,stock_qty:4,min_stock:3,active:true },
-    { ean:"78900006",part_number:"BEB-006",description:"Energético",brand:"Power",price_brl_cents:800,stock_qty:50,min_stock:10,active:true },
+    { id:1,updated_at:0,ean:"78900001",part_number:"BEB-001",description:"Cerveja Pilsen 350 ml",brand:"Commerce",price_brl_cents:550,stock_qty:42,min_stock:10,active:true },
+    { id:2,updated_at:0,ean:"78900002",part_number:"ADE-002",description:"Vinho Tinto Suave",brand:"Adega",price_brl_cents:3000,stock_qty:18,min_stock:5,active:true },
+    { id:3,updated_at:0,ean:"78900003",part_number:"MER-003",description:"Arroz Tipo 1 · 5 kg",brand:"Mercado",price_brl_cents:2890,stock_qty:24,min_stock:8,active:true },
+    { id:4,updated_at:0,ean:"78900004",part_number:"BEB-004",description:"Água Tônica",brand:"Fresh",price_brl_cents:500,stock_qty:9,min_stock:12,active:true },
+    { id:5,updated_at:0,ean:"78900005",part_number:"ADE-005",description:"Whisky 12 Anos",brand:"Reserva",price_brl_cents:12000,stock_qty:4,min_stock:3,active:true },
+    { id:6,updated_at:0,ean:"78900006",part_number:"BEB-006",description:"Energético",brand:"Power",price_brl_cents:800,stock_qty:50,min_stock:10,active:true },
   ];
   let products = $state<Product[]>([]), cart = $state<CartItem[]>([]), query = $state(""), category = $state<Category>("all");
   let darkMode = $state(false);
