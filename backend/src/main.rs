@@ -92,6 +92,7 @@ struct PlatformActivationCodeRequest {
 }
 #[derive(Debug, Serialize)]
 struct PlatformActivationCodeCreated {
+    id: Uuid,
     code: String,
     expires_at: chrono::DateTime<chrono::Utc>,
     max_uses: i32,
@@ -857,13 +858,82 @@ async fn platform_create_activation_code(
         "CC-{}",
         Uuid::new_v4().simple().to_string()[..12].to_uppercase()
     );
+    let activation_id = Uuid::new_v4();
     let expires_at = chrono::Utc::now() + chrono::Duration::days(request.valid_days);
-    sqlx::query("INSERT INTO platform_activation_codes(id,tenant_id,unit_id,code_hash,expires_at,max_uses,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(Uuid::new_v4()).bind(tenant_id).bind(unit_id).bind(hash_key(&code)).bind(expires_at).bind(request.max_uses).bind(auth.admin_id).execute(&state.db).await.map_err(internal)?;
+    sqlx::query("INSERT INTO platform_activation_codes(id,tenant_id,unit_id,code_hash,expires_at,max_uses,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(activation_id).bind(tenant_id).bind(unit_id).bind(hash_key(&code)).bind(expires_at).bind(request.max_uses).bind(auth.admin_id).execute(&state.db).await.map_err(internal)?;
     Ok(Json(PlatformActivationCodeCreated {
+        id: activation_id,
         code,
         expires_at,
         max_uses: request.max_uses,
     }))
+}
+
+async fn platform_suspend_tenant(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    let changed = sqlx::query("UPDATE tenant_subscriptions SET status='suspended',updated_at=now() WHERE tenant_id=$1 AND status<>'cancelled'")
+        .bind(tenant_id).execute(&mut *tx).await.map_err(internal)?.rows_affected();
+    if changed == 0 {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            "assinatura do tenant não encontrada",
+        ));
+    }
+    sqlx::query("UPDATE terminals SET active=false WHERE tenant_id=$1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE platform_activation_codes SET revoked_at=now() WHERE tenant_id=$1 AND revoked_at IS NULL").bind(tenant_id).execute(&mut *tx).await.map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
+    info!(admin=%auth.email,tenant=%tenant_id,"tenant suspenso pela plataforma");
+    Ok(Json(
+        serde_json::json!({"tenant_id":tenant_id,"status":"suspended"}),
+    ))
+}
+
+async fn platform_restore_tenant(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let changed = sqlx::query("UPDATE tenant_subscriptions SET status=CASE WHEN trial_ends_at>now() THEN 'trial' ELSE 'active' END,updated_at=now() WHERE tenant_id=$1 AND status='suspended'")
+        .bind(tenant_id).execute(&state.db).await.map_err(internal)?.rows_affected();
+    if changed == 0 {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "tenant não está suspenso ou não foi encontrado",
+        ));
+    }
+    // Terminais permanecem bloqueados até a reativação consciente no painel: evita
+    // reativar uma máquina perdida somente por restaurar a assinatura.
+    info!(admin=%auth.email,tenant=%tenant_id,"tenant reativado pela plataforma");
+    Ok(Json(
+        serde_json::json!({"tenant_id":tenant_id,"status":"active","terminals_require_reactivation":true}),
+    ))
+}
+
+async fn platform_revoke_activation_code(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(code_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let changed = sqlx::query("UPDATE platform_activation_codes SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL AND uses<max_uses")
+        .bind(code_id).execute(&state.db).await.map_err(internal)?.rows_affected();
+    if changed == 0 {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            "código não encontrado, já utilizado ou já revogado",
+        ));
+    }
+    info!(admin=%auth.email,activation_code=%code_id,"código de ativação revogado");
+    Ok(Json(
+        serde_json::json!({"activation_code_id":code_id,"status":"revoked"}),
+    ))
 }
 
 impl FromRequestParts<Arc<AppState>> for TerminalAuth {
@@ -1637,6 +1707,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/v1/platform/tenants/{tenant_id}/units/{unit_id}/activation-codes",
             post(platform_create_activation_code),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/suspend",
+            post(platform_suspend_tenant),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/restore",
+            post(platform_restore_tenant),
+        )
+        .route(
+            "/api/v1/platform/activation-codes/{code_id}/revoke",
+            post(platform_revoke_activation_code),
         )
         .route("/api/v1/sync/outbox", post(ingest_event))
         .route("/api/v1/sync/products", get(products))
