@@ -84,14 +84,51 @@ struct PlatformTenantCreated {
     trial_ends_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Debug, Serialize, sqlx::FromRow)]
-struct CommercialPlanOut { code: String, name: String, monthly_brl_cents: i32, description: String, fiscal_eligible: bool, premium_pdv: bool, active: bool }
+struct CommercialPlanOut {
+    code: String,
+    name: String,
+    monthly_brl_cents: i32,
+    description: String,
+    fiscal_eligible: bool,
+    premium_pdv: bool,
+    active: bool,
+}
 #[derive(Debug, Serialize, sqlx::FromRow)]
-struct EquipmentOut { id: Uuid, sku: String, name: String, category: String, sale_brl_cents: Option<i32>, rental_brl_cents: Option<i32>, source_url: Option<String>, active: bool }
+struct EquipmentOut {
+    id: Uuid,
+    sku: String,
+    name: String,
+    category: String,
+    sale_brl_cents: Option<i32>,
+    rental_brl_cents: Option<i32>,
+    source_url: Option<String>,
+    active: bool,
+}
 #[derive(Debug, Deserialize)]
-struct CommercialLeadRequest { store_name: String, contact_name: Option<String>, email: Option<String>, phone: Option<String>, city: Option<String>, plan_code: Option<String>, #[serde(default = "default_modality")] modality: String, details: Option<String> }
-fn default_modality() -> String { "purchase".into() }
+struct CommercialLeadRequest {
+    store_name: String,
+    contact_name: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
+    city: Option<String>,
+    plan_code: Option<String>,
+    #[serde(default = "default_modality")]
+    modality: String,
+    details: Option<String>,
+}
+fn default_modality() -> String {
+    "purchase".into()
+}
 #[derive(Debug, Deserialize)]
-struct EquipmentInput { sku: String, name: String, category: String, sale_brl_cents: Option<i32>, rental_brl_cents: Option<i32>, source_url: Option<String>, active: bool }
+struct EquipmentInput {
+    sku: String,
+    name: String,
+    category: String,
+    sale_brl_cents: Option<i32>,
+    rental_brl_cents: Option<i32>,
+    source_url: Option<String>,
+    active: bool,
+}
 #[derive(Debug, Deserialize)]
 struct PlatformActivationCodeRequest {
     #[serde(default = "default_activation_days")]
@@ -831,23 +868,67 @@ async fn platform_tenants(
     Ok(Json(tenants))
 }
 
-async fn commercial_lead(State(state): State<Arc<AppState>>, Json(request): Json<CommercialLeadRequest>) -> Result<Json<Value>, ApiError> {
+async fn commercial_lead(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<CommercialLeadRequest>,
+) -> Result<Json<Value>, ApiError> {
     let store_name = request.store_name.trim();
-    if store_name.len() < 2 || store_name.len() > 120 || !matches!(request.modality.as_str(), "purchase" | "loan") { return Err(error(StatusCode::BAD_REQUEST, "dados comerciais inválidos")); }
-    if let Some(code) = &request.plan_code { let valid = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM platform_plan_catalog WHERE code=$1 AND active=true)").bind(code).fetch_one(&state.db).await.map_err(internal)?; if !valid { return Err(error(StatusCode::BAD_REQUEST, "plano inválido")); } }
-    let id=Uuid::new_v4(); sqlx::query("INSERT INTO commercial_leads(id,store_name,contact_name,email,phone,city,plan_code,modality,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)").bind(id).bind(store_name).bind(request.contact_name).bind(request.email).bind(request.phone).bind(request.city).bind(request.plan_code).bind(request.modality).bind(request.details).execute(&state.db).await.map_err(internal)?;
+    if store_name.len() < 2
+        || store_name.len() > 120
+        || !matches!(request.modality.as_str(), "purchase" | "loan")
+    {
+        return Err(error(StatusCode::BAD_REQUEST, "dados comerciais inválidos"));
+    }
+    if let Some(code) = &request.plan_code {
+        let valid = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM platform_plan_catalog WHERE code=$1 AND active=true)",
+        )
+        .bind(code)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal)?;
+        if !valid {
+            return Err(error(StatusCode::BAD_REQUEST, "plano inválido"));
+        }
+    }
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO commercial_leads(id,store_name,contact_name,email,phone,city,plan_code,modality,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)").bind(id).bind(store_name).bind(request.contact_name).bind(request.email).bind(request.phone).bind(request.city).bind(request.plan_code).bind(request.modality).bind(request.details).execute(&state.db).await.map_err(internal)?;
     Ok(Json(serde_json::json!({"id":id,"received":true})))
 }
-async fn platform_commercial_catalog(State(state): State<Arc<AppState>>, _auth: PlatformAuth) -> Result<Json<Value>, ApiError> {
- let plans=sqlx::query_as::<_,CommercialPlanOut>("SELECT code,name,monthly_brl_cents,description,fiscal_eligible,premium_pdv,active FROM platform_plan_catalog ORDER BY monthly_brl_cents").fetch_all(&state.db).await.map_err(internal)?;
- let equipment=sqlx::query_as::<_,EquipmentOut>("SELECT id,sku,name,category,sale_brl_cents,rental_brl_cents,source_url,active FROM platform_equipment_catalog ORDER BY name").fetch_all(&state.db).await.map_err(internal)?;
- let flags=sqlx::query_as::<_,(String,String,String,bool,bool)>("SELECT key,name,description,requires_homologation,active FROM platform_feature_flags ORDER BY key").fetch_all(&state.db).await.map_err(internal)?;
- Ok(Json(serde_json::json!({"plans":plans,"equipment":equipment,"flags":flags.into_iter().map(|f|serde_json::json!({"key":f.0,"name":f.1,"description":f.2,"requires_homologation":f.3,"active":f.4})).collect::<Vec<_>>()})))
+async fn platform_commercial_catalog(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<Json<Value>, ApiError> {
+    let plans=sqlx::query_as::<_,CommercialPlanOut>("SELECT code,name,monthly_brl_cents,description,fiscal_eligible,premium_pdv,active FROM platform_plan_catalog ORDER BY monthly_brl_cents").fetch_all(&state.db).await.map_err(internal)?;
+    let equipment=sqlx::query_as::<_,EquipmentOut>("SELECT id,sku,name,category,sale_brl_cents,rental_brl_cents,source_url,active FROM platform_equipment_catalog ORDER BY name").fetch_all(&state.db).await.map_err(internal)?;
+    let flags=sqlx::query_as::<_,(String,String,String,bool,bool)>("SELECT key,name,description,requires_homologation,active FROM platform_feature_flags ORDER BY key").fetch_all(&state.db).await.map_err(internal)?;
+    Ok(Json(
+        serde_json::json!({"plans":plans,"equipment":equipment,"flags":flags.into_iter().map(|f|serde_json::json!({"key":f.0,"name":f.1,"description":f.2,"requires_homologation":f.3,"active":f.4})).collect::<Vec<_>>()}),
+    ))
 }
-async fn platform_create_equipment(State(state): State<Arc<AppState>>, auth: PlatformAuth, Json(input): Json<EquipmentInput>) -> Result<Json<EquipmentOut>, ApiError> {
- if input.sku.trim().is_empty() || input.name.trim().is_empty() || input.category.trim().is_empty() || input.sale_brl_cents.is_some_and(|v|v<0) || input.rental_brl_cents.is_some_and(|v|v<0) { return Err(error(StatusCode::BAD_REQUEST,"equipamento inválido")); }
- let item=sqlx::query_as::<_,EquipmentOut>("INSERT INTO platform_equipment_catalog(id,sku,name,category,sale_brl_cents,rental_brl_cents,source_url,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,sku,name,category,sale_brl_cents,rental_brl_cents,source_url,active").bind(Uuid::new_v4()).bind(input.sku.trim()).bind(input.name.trim()).bind(input.category.trim()).bind(input.sale_brl_cents).bind(input.rental_brl_cents).bind(input.source_url).bind(input.active).fetch_one(&state.db).await.map_err(internal)?;
- platform_audit(&state.db,auth.admin_id,"equipment.created",None,serde_json::json!({"equipment_id":item.id,"sku":item.sku})).await; Ok(Json(item))
+async fn platform_create_equipment(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Json(input): Json<EquipmentInput>,
+) -> Result<Json<EquipmentOut>, ApiError> {
+    if input.sku.trim().is_empty()
+        || input.name.trim().is_empty()
+        || input.category.trim().is_empty()
+        || input.sale_brl_cents.is_some_and(|v| v < 0)
+        || input.rental_brl_cents.is_some_and(|v| v < 0)
+    {
+        return Err(error(StatusCode::BAD_REQUEST, "equipamento inválido"));
+    }
+    let item=sqlx::query_as::<_,EquipmentOut>("INSERT INTO platform_equipment_catalog(id,sku,name,category,sale_brl_cents,rental_brl_cents,source_url,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,sku,name,category,sale_brl_cents,rental_brl_cents,source_url,active").bind(Uuid::new_v4()).bind(input.sku.trim()).bind(input.name.trim()).bind(input.category.trim()).bind(input.sale_brl_cents).bind(input.rental_brl_cents).bind(input.source_url).bind(input.active).fetch_one(&state.db).await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "equipment.created",
+        None,
+        serde_json::json!({"equipment_id":item.id,"sku":item.sku}),
+    )
+    .await;
+    Ok(Json(item))
 }
 
 async fn platform_create_tenant(
@@ -861,7 +942,10 @@ async fn platform_create_tenant(
         || name.len() > 120
         || unit_name.len() < 2
         || unit_name.len() > 120
-        || !matches!(request.plan.as_str(), "starter" | "fiscal" | "premium" | "essencial" | "profissional" | "rede")
+        || !matches!(
+            request.plan.as_str(),
+            "starter" | "fiscal" | "premium" | "essencial" | "profissional" | "rede"
+        )
         || !(0..=365).contains(&request.trial_days)
     {
         return Err(error(StatusCode::BAD_REQUEST, "dados do tenant inválidos"));
@@ -1866,8 +1950,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/platform/auth/logout", post(platform_logout))
         .route("/api/v1/platform/me", get(platform_me))
         .route("/api/v1/commercial/leads", post(commercial_lead))
-        .route("/api/v1/platform/commercial/catalog", get(platform_commercial_catalog))
-        .route("/api/v1/platform/commercial/equipment", post(platform_create_equipment))
+        .route(
+            "/api/v1/platform/commercial/catalog",
+            get(platform_commercial_catalog),
+        )
+        .route(
+            "/api/v1/platform/commercial/equipment",
+            post(platform_create_equipment),
+        )
         .route("/api/v1/platform/tenants", get(platform_tenants))
         .route("/api/v1/platform/tenants", post(platform_create_tenant))
         .route(
