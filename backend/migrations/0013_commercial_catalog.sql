@@ -1,4 +1,4 @@
-CREATE TABLE platform_plan_catalog (
+CREATE TABLE IF NOT EXISTS platform_plan_catalog (
     code text PRIMARY KEY CHECK (code IN ('starter','fiscal','premium')),
     name text NOT NULL,
     monthly_brl_cents integer NOT NULL CHECK (monthly_brl_cents >= 0),
@@ -8,14 +8,15 @@ CREATE TABLE platform_plan_catalog (
     active boolean NOT NULL DEFAULT true,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
-ALTER TABLE tenant_subscriptions DROP CONSTRAINT tenant_subscriptions_plan_check;
+ALTER TABLE tenant_subscriptions DROP CONSTRAINT IF EXISTS tenant_subscriptions_plan_check;
 ALTER TABLE tenant_subscriptions ADD CONSTRAINT tenant_subscriptions_plan_check CHECK(plan IN ('essencial','profissional','rede','starter','fiscal','premium'));
 INSERT INTO platform_plan_catalog(code,name,monthly_brl_cents,description,fiscal_eligible,premium_pdv) VALUES
 ('starter','Comecar',10000,'PDV, estoque, relatorios basicos e comprovante nao fiscal.',false,false),
 ('fiscal','Fiscal',18000,'Recursos fiscais liberados somente apos homologacao.',true,false),
-('premium','PDV Premium',25000,'Operacao multiunidade e recursos premium liberados.',true,true);
+('premium','PDV Premium',25000,'Operacao multiunidade e recursos premium liberados.',true,true)
+ON CONFLICT (code) DO UPDATE SET name=excluded.name, monthly_brl_cents=excluded.monthly_brl_cents, description=excluded.description, fiscal_eligible=excluded.fiscal_eligible, premium_pdv=excluded.premium_pdv, updated_at=now();
 
-CREATE TABLE platform_feature_flags (
+CREATE TABLE IF NOT EXISTS platform_feature_flags (
     key text PRIMARY KEY,
     name text NOT NULL,
     description text NOT NULL,
@@ -30,16 +31,17 @@ INSERT INTO platform_feature_flags(key,name,description,requires_homologation) V
 ('balanca_prix','Balanca Prix','Leitura por rede apos validacao do protocolo.',true),
 ('android_companion','Aplicativo Android','Companheiro Android apos publicacao assinada.',true),
 ('multiunidade','Multiunidade','Gestao de multiplas unidades.',false),
-('tv_ofertas','TV de ofertas','Canal de ofertas por unidade.',false);
+('tv_ofertas','TV de ofertas','Canal de ofertas por unidade.',false)
+ON CONFLICT (key) DO UPDATE SET name=excluded.name, description=excluded.description, requires_homologation=excluded.requires_homologation, active=excluded.active;
 
-CREATE TABLE tenant_feature_flags (
+CREATE TABLE IF NOT EXISTS tenant_feature_flags (
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     key text NOT NULL REFERENCES platform_feature_flags(key),
     enabled boolean NOT NULL DEFAULT false,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(tenant_id,key)
 );
-CREATE TABLE platform_equipment_catalog (
+CREATE TABLE IF NOT EXISTS platform_equipment_catalog (
     id uuid PRIMARY KEY,
     sku text NOT NULL UNIQUE,
     name text NOT NULL,
@@ -50,7 +52,7 @@ CREATE TABLE platform_equipment_catalog (
     active boolean NOT NULL DEFAULT true,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE commercial_leads (
+CREATE TABLE IF NOT EXISTS commercial_leads (
     id uuid PRIMARY KEY,
     store_name text NOT NULL,
     contact_name text,
@@ -62,7 +64,7 @@ CREATE TABLE commercial_leads (
     details text,
     created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE tenant_integration_configs (
+CREATE TABLE IF NOT EXISTS tenant_integration_configs (
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     provider text NOT NULL CHECK(provider IN ('ifood','99food','ze_delivery','fiscal')),
     enabled boolean NOT NULL DEFAULT false,
@@ -72,4 +74,4 @@ CREATE TABLE tenant_integration_configs (
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(tenant_id,provider)
 );
--- migration 0013 reescrita em UTF-8 valido para sqlx-migrate
+-- migration 0013 reescrita em UTF-8 valido e idempotente para sqlx-migrate
