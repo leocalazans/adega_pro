@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "commercectrl-pdv"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "argon2",
  "axum",

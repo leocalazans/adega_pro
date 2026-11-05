@@ -25,5 +25,9 @@ services:
         sync: false
       - key: LICENSE_SIGNING_KEY_B64
         sync: false
+      - key: SUPERADMIN_EMAIL
+        sync: false
+      - key: SUPERADMIN_PASSWORD
+        sync: false
       - key: RUST_LOG
         value: commercectrl_backend=info,tower_http=info

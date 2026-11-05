@@ -9,9 +9,14 @@ try {
   Invoke-RestMethod "$ApiUrl/api/v1/platform/auth/login" -Method Post -WebSession $session -ContentType 'application/json' -Body $body | Out-Null
   $body=$null
   $tenants=Invoke-RestMethod "$ApiUrl/api/v1/platform/tenants" -WebSession $session
-  if(@($tenants|Where-Object name -eq 'Mercadinho Martins').Count){throw 'Martins já existe. Operação interrompida para não duplicar o cliente; consulte a unidade existente.'}
-  $tenant=Invoke-RestMethod "$ApiUrl/api/v1/platform/tenants" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{name='Mercadinho Martins';unit_name='Matriz Centro';plan='starter';trial_days=30}|ConvertTo-Json)
-  Write-Host "Tenant criado: $($tenant.tenant_id). Unidade: $($tenant.unit_id)."
+  $existing=@($tenants|Where-Object name -eq 'Mercadinho Martins')
+  if($existing.Count){
+    $tenant=Invoke-RestMethod "$ApiUrl/api/v1/platform/tenants/$($existing[0].id)" -WebSession $session
+    Write-Host "Martins já existe; reutilizando tenant: $($tenant.tenant_id). Unidade: $($tenant.unit_id)."
+  } else {
+    $tenant=Invoke-RestMethod "$ApiUrl/api/v1/platform/tenants" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{name='Mercadinho Martins';unit_name='Matriz Centro';plan='starter';trial_days=30}|ConvertTo-Json)
+    Write-Host "Tenant criado: $($tenant.tenant_id). Unidade: $($tenant.unit_id)."
+  }
   $activation=Invoke-RestMethod "$ApiUrl/api/v1/platform/tenants/$($tenant.tenant_id)/units/$($tenant.unit_id)/activation-codes" -Method Post -WebSession $session -ContentType 'application/json' -Body '{"valid_days":7,"max_uses":1}'
   Write-Host 'Código de uso único (copie para o instalador; não publique):'
   Write-Host $activation.code

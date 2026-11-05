@@ -40,6 +40,59 @@ export const inTauri = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const LOCAL_API = "http://127.0.0.1:9001";
 
+let _apiBaseOverride: string | null = null;
+
+export function setApiBaseOverride(url: string | null): void {
+  _apiBaseOverride = url;
+}
+
+export function getApiBase(): string {
+  if (_apiBaseOverride) return _apiBaseOverride;
+  if (typeof window !== "undefined") {
+    const envUrl = (import.meta as any).env?.VITE_COMMERCECTRL_API_URL;
+    if (envUrl) return envUrl.replace(/\/$/, "");
+    return (window as any).__COMMERCECTRL_API_URL__ || "";
+  }
+  return "https://api.commercectrl.com";
+}
+
+export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${getApiBase()}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `Falha na API (HTTP ${res.status})`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export interface PlatformSession {
+  email: string;
+  role: string;
+}
+
+export async function platformLogin(email: string, password: string): Promise<PlatformSession> {
+  return apiFetch<PlatformSession>("/api/v1/platform/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function platformLogout(): Promise<void> {
+  await apiFetch("/api/v1/platform/auth/logout", { method: "POST" });
+}
+
+export async function platformMe(): Promise<PlatformSession | null> {
+  try {
+    return await apiFetch<PlatformSession>("/api/v1/platform/me");
+  } catch {
+    return null;
+  }
+}
+
 export async function kioskAdminStatus(): Promise<KioskAdminStatus> {
   if (inTauri()) return invoke("kiosk_admin_status");
   return { configured: false };

@@ -8,7 +8,7 @@ use axum::{
     extract::{FromRequestParts, Path, Query, State},
     http::{header, request::Parts, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use base64::engine::general_purpose::STANDARD;
@@ -71,10 +71,14 @@ struct PlatformTenantOut {
 struct PlatformTenantCreateRequest {
     name: String,
     unit_name: String,
+    email: Option<String>,
+    cnpj_cpf: Option<String>,
+    phone: Option<String>,
     #[serde(default = "default_plan")]
     plan: String,
     #[serde(default)]
     trial_days: i64,
+    create_asaas_customer: Option<bool>,
 }
 #[derive(Debug, Serialize)]
 struct PlatformTenantCreated {
@@ -82,6 +86,7 @@ struct PlatformTenantCreated {
     unit_id: Uuid,
     name: String,
     trial_ends_at: chrono::DateTime<chrono::Utc>,
+    asaas_customer_id: Option<String>,
 }
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct CommercialPlanOut {
@@ -983,6 +988,22 @@ async fn platform_create_tenant(
     let tenant_id = Uuid::new_v4();
     let unit_id = Uuid::new_v4();
     let trial_ends_at = chrono::Utc::now() + chrono::Duration::days(request.trial_days);
+    let mut asaas_customer_id: Option<String> = None;
+    if request.create_asaas_customer.unwrap_or(false) {
+        match create_asaas_customer(
+            &request.name,
+            request.email.as_deref(),
+            request.cnpj_cpf.as_deref(),
+            request.phone.as_deref(),
+        )
+        .await
+        {
+            Ok(id) => asaas_customer_id = Some(id),
+            Err(e) => {
+                warn!(admin=%auth.email, tenant=%tenant_id, "falha ao criar customer Asaas: {:?}", e)
+            }
+        }
+    }
     let mut tx = state.db.begin().await.map_err(internal)?;
     sqlx::query("INSERT INTO tenants(id,name) VALUES($1,$2)")
         .bind(tenant_id)
@@ -997,14 +1018,14 @@ async fn platform_create_tenant(
         .execute(&mut *tx)
         .await
         .map_err(internal)?;
-    sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at) VALUES($1,$2,$3,$4,$4)").bind(tenant_id).bind(&request.plan).bind(if request.trial_days>0{"trial"}else{"active"}).bind(trial_ends_at).execute(&mut *tx).await.map_err(internal)?;
+    sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at,asaas_customer_id) VALUES($1,$2,$3,$4,$4,$5)").bind(tenant_id).bind(&request.plan).bind(if request.trial_days>0{"trial"}else{"active"}).bind(trial_ends_at).bind(&asaas_customer_id).execute(&mut *tx).await.map_err(internal)?;
     tx.commit().await.map_err(internal)?;
     platform_audit(
         &state.db,
         auth.admin_id,
         "tenant.created",
         Some(tenant_id),
-        serde_json::json!({"plan":request.plan,"trial_days":request.trial_days,"unit_id":unit_id}),
+        serde_json::json!({"plan":request.plan,"trial_days":request.trial_days,"unit_id":unit_id,"asaas_customer_id":asaas_customer_id}),
     )
     .await;
     info!(admin=%auth.email,tenant=%tenant_id,"tenant provisionado pela plataforma");
@@ -1013,7 +1034,105 @@ async fn platform_create_tenant(
         unit_id,
         name: name.into(),
         trial_ends_at,
+        asaas_customer_id,
     }))
+}
+
+#[derive(Debug, Serialize)]
+struct AsaasCustomerRequest {
+    name: String,
+    email: Option<String>,
+    cpf_cnpj: Option<String>,
+    phone: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AsaasCustomerResponse {
+    id: String,
+}
+
+async fn create_asaas_customer(
+    name: &str,
+    email: Option<&str>,
+    cpf_cnpj: Option<&str>,
+    phone: Option<&str>,
+) -> Result<String, ApiError> {
+    let api_key = env::var("ASAAS_API_KEY").unwrap_or_default();
+    let base_url =
+        env::var("ASAAS_BASE_URL").unwrap_or_else(|_| "https://api-sandbox.asaas.com/v3".into());
+    if api_key.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "Asaas API key não configurada",
+        ));
+    }
+    let client = reqwest::Client::new();
+    let payload = AsaasCustomerRequest {
+        name: name.to_string(),
+        email: email.map(|s| s.to_string()),
+        cpf_cnpj: cpf_cnpj.map(|s| s.to_string()),
+        phone: phone.map(|s| s.to_string()),
+    };
+    let resp = client
+        .post(format!("{}/customers", base_url))
+        .header("access_token", &api_key)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| error(StatusCode::BAD_GATEWAY, format!("Asaas indisponível: {e}")))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(error(
+            StatusCode::BAD_GATEWAY,
+            format!("Asaas recusou ({status}): {text}"),
+        ));
+    }
+    let created: AsaasCustomerResponse = resp.json().await.map_err(internal)?;
+    Ok(created.id)
+}
+
+async fn platform_create_asaas_customer(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<PlatformTenantCreateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1)")
+        .bind(tenant_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal)?;
+    if !exists {
+        return Err(error(StatusCode::NOT_FOUND, "tenant não encontrado"));
+    }
+    let id = create_asaas_customer(
+        &request.name,
+        request.email.as_deref(),
+        request.cnpj_cpf.as_deref(),
+        request.phone.as_deref(),
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE tenant_subscriptions SET asaas_customer_id=$1, updated_at=now() WHERE tenant_id=$2",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .execute(&state.db)
+    .await
+    .map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "asaas_customer.created",
+        Some(tenant_id),
+        serde_json::json!({"asaas_customer_id": id}),
+    )
+    .await;
+    Ok(Json(
+        serde_json::json!({"tenant_id": tenant_id, "asaas_customer_id": id}),
+    ))
 }
 
 async fn platform_create_activation_code(
@@ -1991,6 +2110,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/v1/platform/tenants", get(platform_tenants))
         .route("/api/v1/platform/tenants", post(platform_create_tenant))
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/asaas-customer",
+            post(platform_create_asaas_customer),
+        )
         .route(
             "/api/v1/platform/tenants/{tenant_id}",
             get(platform_tenant_detail),

@@ -3,12 +3,10 @@
   import { listen } from "@tauri-apps/api/event";
   import { Menu, Moon, Sun, PanelLeftClose, PanelLeftOpen, CircleUserRound, Wifi, WifiOff, LockKeyhole } from "@lucide/svelte";
   import { routes } from "./lib/navigation";
-  import { activationStatus, cloudOwnerBranding, configureKioskAdminPin, currentSession, exitKioskAsAdmin, inTauri, kioskAdminStatus, logoutEmployee, syncStatus } from "./lib/tauri";
+  import { activationStatus, cloudOwnerBranding, configureKioskAdminPin, currentSession, exitKioskAsAdmin, inTauri, kioskAdminStatus, logoutEmployee, platformLogout, syncStatus } from "./lib/tauri";
   import type { UserSession } from "./lib/types";
   import Dashboard from "./pages/Dashboard.svelte";
   import Pos from "./pages/Pos.svelte";
-  import Pos2 from "./pages/Pos2.svelte";
-  import Pos3Online from "./pages/Pos3Online.svelte";
   import Products from "./pages/Products.svelte";
   import Restock from "./pages/Restock.svelte";
   import CashClosing from "./pages/CashClosing.svelte";
@@ -133,8 +131,8 @@
   let title = $derived(routes.find((route) => route.href === path)?.label ?? "CommerceCTRL");
   let isPosRoute = $derived(path === "/pos" || path.startsWith("/pos/"));
   let visibleRoutes = $derived(routes.filter(route=>session?.permissions.includes("*")||session?.permissions.includes(route.permission)));
-  function loggedIn(value:UserSession){session=value;const allowed=visibleRoutes.some(route=>route.href===path);if(!allowed)navigate(visibleRoutes[0]?.href??"/time-clock")}
-  async function logout(){await logoutEmployee();session=null;path="/";history.replaceState({},"","/")}
+  function loggedIn(value:UserSession){session=value;if(value.role === "superadmin"){navigate("/superadmin");return}const allowed=visibleRoutes.some(route=>route.href===path);if(!allowed)navigate(visibleRoutes[0]?.href??"/time-clock")}
+  async function logout(){if(!inTauri()){await platformLogout().catch(()=>{})}await logoutEmployee();session=null;path="/";history.replaceState({},"","/")}
 </script>
 
 {#if isDesktop && !activationChecked}
@@ -160,9 +158,15 @@
 {:else if !isDesktop && import.meta.env.DEV && path === "/pos"}
   <Pos />
 {:else if !isDesktop && import.meta.env.DEV && path === "/pos2"}
-  <Pos2 />
+  {#await import("./pages/Pos2.svelte") then module}
+    {@const Pos2 = module.default}
+    <Pos2 />
+  {/await}
 {:else if !isDesktop && path === "/pos3-online"}
-  <Pos3Online />
+  {#await import("./pages/Pos3Online.svelte") then module}
+    {@const Pos3Online = module.default}
+    <Pos3Online />
+  {/await}
 {:else if !session}
   <Login storeName={isDesktop ? clientName : "CommerceCTRL"} onLogin={loggedIn}/>
 {:else}
@@ -211,7 +215,7 @@
         {:else if path === "/contacts"}<Contacts />
         {:else if path === "/promotions"}<Promotions />
         {:else if path === "/settings"}<Settings />
-        {:else if path === "/superadmin" && session.username === "superadmin@commercecontrol.com.br"}<SuperAdmin />
+        {:else if path === "/superadmin" && session?.role === "superadmin"}<SuperAdmin />
         {:else}<Dashboard />{/if}
       </main>
     </section>

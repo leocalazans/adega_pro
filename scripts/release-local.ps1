@@ -13,9 +13,9 @@ function Read-PrivateValue([string]$Prompt){
   finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
 }
 try {
-  # O Tauri aceita o conteúdo da chave em TAURI_SIGNING_PRIVATE_KEY; para um
-  # arquivo local, a variável correta é a variante *_PATH.
-  $env:TAURI_SIGNING_PRIVATE_KEY_PATH=$keyPath
+  # A CLI Tauri exige o conteúdo da chave nesta variável. Ela só existe no
+  # processo de release e é removida no bloco finally abaixo.
+  $env:TAURI_SIGNING_PRIVATE_KEY=(Get-Content -LiteralPath $keyPath -Raw)
   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD=Read-PrivateValue 'Senha da chave privada (Enter se vazia)'
   $env:COMMERCECTRL_API_URL='https://adega-pro-sndh.onrender.com'
   if(-not $env:COMMERCECTRL_LICENSE_PUBLIC_KEY_B64){
@@ -34,7 +34,7 @@ try {
   & (Join-Path $PSScriptRoot 'publish-update.ps1') -Version $config.version
 } finally {
   Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
-  Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PATH -ErrorAction SilentlyContinue
+  Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:SUPABASE_SERVICE_ROLE_KEY -ErrorAction SilentlyContinue
   if($previousLicensePublic){$env:COMMERCECTRL_LICENSE_PUBLIC_KEY_B64=$previousLicensePublic}
   else {Remove-Item Env:COMMERCECTRL_LICENSE_PUBLIC_KEY_B64 -ErrorAction SilentlyContinue}
