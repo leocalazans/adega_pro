@@ -91,7 +91,7 @@
     width: min(470px, 100%);
     padding: 34px;
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: 6px;
     background: var(--surface);
     box-shadow: 0 12px 40px rgba(13, 92, 58, 0.12);
   }
@@ -139,7 +139,7 @@
   .activation-card input {
     padding: 13px;
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: 6px;
     background: var(--surface);
     color: var(--ink);
     font: 500 15px Inter, sans-serif;
@@ -152,7 +152,7 @@
   .activation-card button {
     padding: 14px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 6px;
     background: var(--primary);
     color: #fff;
     font-weight: 700;
@@ -173,7 +173,7 @@
   .error {
     margin: 0;
     padding: 10px;
-    border-radius: 8px;
+    border-radius: 6px;
     background: var(--danger-wash);
     color: var(--danger-ink);
     font-size: 12px;
