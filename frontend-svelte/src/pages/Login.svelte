@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { LockKeyhole, ShieldCheck, Store, UserRound, Mail, Globe, Monitor } from "@lucide/svelte";
-  import { inTauri, loginEmployee, changeOwnPassword, platformLogin, platformMe } from "../lib/tauri";
+  import { inTauri, loginEmployee, changeOwnPassword, platformLogin, platformMe, tenantLogin, tenantMe } from "../lib/tauri";
   import type { UserSession } from "../lib/types";
 
   let { onLogin, storeName = "CommerceCTRL" }: { onLogin: (session: UserSession) => void; storeName?: string } = $props();
@@ -19,11 +19,11 @@
   let firstAccess = $state(false);
   let busy = $state(false);
   let error = $state("");
-  let mode = $state<"employee" | "platform">(isWeb ? "platform" : "employee");
+  let mode = $state<"employee" | "platform">("employee");
 
   onMount(async () => {
     if (isWeb) {
-      const existing = await platformMe().catch(() => null);
+      const existing = await tenantMe().catch(() => null);
       if (existing) {
         onLogin({
           user_id: 0,
@@ -51,7 +51,7 @@
           onLogin(result.session);
         }
       } else {
-        const result = await platformLogin(email, password);
+        const result = await tenantLogin(email, password);
         onLogin({
           user_id: 0,
           employee_id: null,
@@ -142,9 +142,19 @@
     <div class="mode-tabs" role="tablist">
       <button
         role="tab"
+        aria-selected={mode === "employee"}
+        class:active={mode === "employee"}
+        onclick={() => switchMode("employee")}
+        disabled={busy}
+      >
+        <UserRound size={16} /> Funcionário
+      </button>
+      <button
+        role="tab"
         aria-selected={mode === "platform"}
         class:active={mode === "platform"}
-        disabled
+        onclick={() => switchMode("platform")}
+        disabled={busy}
       >
         <Mail size={16} /> Administrador
       </button>
@@ -171,11 +181,11 @@
     {:else}
       <form onsubmit={(event) => { event.preventDefault(); submit(); }}>
         <header>
-          <h3>{isDesktop ? "Entrar no caixa" : mode === "platform" ? "Acesso administrativo" : "Entrar como funcionário"}</h3>
-          <p>{isDesktop ? "Use as credenciais liberadas pelo administrador da loja." : mode === "platform" ? "Acesso ao painel de gestão da plataforma." : "Credenciais de operador de caixa."}</p>
+          <h3>{isDesktop ? "Entrar no caixa" : "Acesso ao comércio"}</h3>
+          <p>{isDesktop ? "Use as credenciais liberadas pelo administrador da loja." : "Credenciais de operador de caixa ou administrador do tenant."}</p>
         </header>
 
-        {#if isDesktop || mode === "employee"}
+        {#if isDesktop}
           <label>
             Usuário
             <div class="input-wrap"><UserRound size={18} /><input autocomplete="username" required bind:value={username} /></div>

@@ -93,6 +93,32 @@ export async function platformMe(): Promise<PlatformSession | null> {
   }
 }
 
+export interface TenantSession {
+  email: string;
+  role: string;
+  tenant_id: string;
+  unit_id?: string | null;
+}
+
+export async function tenantLogin(email: string, password: string): Promise<TenantSession> {
+  return apiFetch<TenantSession>("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function tenantLogout(): Promise<void> {
+  await apiFetch("/api/v1/auth/logout", { method: "POST" });
+}
+
+export async function tenantMe(): Promise<TenantSession | null> {
+  try {
+    return await apiFetch<TenantSession>("/api/v1/auth/me");
+  } catch {
+    return null;
+  }
+}
+
 export async function kioskAdminStatus(): Promise<KioskAdminStatus> {
   if (inTauri()) return invoke("kiosk_admin_status");
   return { configured: false };

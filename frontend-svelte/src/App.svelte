@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { Menu, Moon, Sun, PanelLeftClose, PanelLeftOpen, CircleUserRound, Wifi, WifiOff, LockKeyhole } from "@lucide/svelte";
   import { routes } from "./lib/navigation";
-  import { activationStatus, cloudOwnerBranding, configureKioskAdminPin, currentSession, exitKioskAsAdmin, inTauri, kioskAdminStatus, logoutEmployee, platformLogout, syncStatus } from "./lib/tauri";
+  import { activationStatus, cloudOwnerBranding, configureKioskAdminPin, currentSession, exitKioskAsAdmin, inTauri, kioskAdminStatus, logoutEmployee, platformLogout, tenantLogout, syncStatus } from "./lib/tauri";
   import type { UserSession } from "./lib/types";
   import Dashboard from "./pages/Dashboard.svelte";
   import Pos from "./pages/Pos.svelte";
@@ -132,7 +132,7 @@
   let isPosRoute = $derived(path === "/pos" || path.startsWith("/pos/"));
   let visibleRoutes = $derived(routes.filter(route=>session?.permissions.includes("*")||session?.permissions.includes(route.permission)));
   function loggedIn(value:UserSession){session=value;if(value.role === "superadmin"){navigate("/superadmin");return}const allowed=visibleRoutes.some(route=>route.href===path);if(!allowed)navigate(visibleRoutes[0]?.href??"/time-clock")}
-  async function logout(){if(!inTauri()){await platformLogout().catch(()=>{})}await logoutEmployee();session=null;path="/";history.replaceState({},"","/")}
+  async function logout(){if(!inTauri()){if(session?.role === "superadmin"){await platformLogout().catch(()=>{})}else{await tenantLogout().catch(()=>{})}}await logoutEmployee();session=null;path="/";history.replaceState({},"","/")}
 </script>
 
 {#if isDesktop && !activationChecked}

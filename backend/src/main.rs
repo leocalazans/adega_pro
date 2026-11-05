@@ -45,10 +45,34 @@ struct PlatformAuth {
     email: String,
 }
 
+#[derive(Debug, Clone)]
+struct TenantAuth {
+    user_id: Uuid,
+    tenant_id: Uuid,
+    email: String,
+    role: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct PlatformLoginRequest {
     email: String,
     password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TenantLoginRequest {
+    email: String,
+    password: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TenantUserRecord {
+    id: Uuid,
+    tenant_id: Uuid,
+    unit_id: Option<Uuid>,
+    email: String,
+    password_hash: String,
+    role: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -774,6 +798,33 @@ fn platform_cookie(headers: &HeaderMap) -> Result<&str, ApiError> {
         .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão administrativa ausente"))
 }
 
+fn tenant_session_cookie(token: &str) -> Result<HeaderValue, ApiError> {
+    format!(
+        "__Host-commercectrl_tenant_session={token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=604800"
+    )
+    .parse()
+    .map_err(internal)
+}
+
+fn expired_tenant_session_cookie() -> HeaderValue {
+    "__Host-commercectrl_tenant_session=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0"
+        .parse()
+        .expect("cookie estática válida")
+}
+
+fn tenant_cookie(headers: &HeaderMap) -> Result<&str, ApiError> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| {
+            raw.split(';')
+                .map(str::trim)
+                .find_map(|part| part.strip_prefix("__Host-commercectrl_tenant_session="))
+        })
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão de usuário ausente"))
+}
+
 impl FromRequestParts<Arc<AppState>> for PlatformAuth {
     type Rejection = ApiError;
 
@@ -797,6 +848,35 @@ impl FromRequestParts<Arc<AppState>> for PlatformAuth {
         Ok(Self {
             admin_id: row.0,
             email: row.1,
+        })
+    }
+}
+
+impl FromRequestParts<Arc<AppState>> for TenantAuth {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let token = tenant_cookie(&parts.headers)?;
+        let row = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+            "SELECT u.id,u.tenant_id,u.email,u.role FROM tenant_sessions s JOIN tenant_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.active=true",
+        )
+        .bind(hash_key(token))
+        .fetch_optional(&state.db)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão de usuário expirada"))?;
+        let _ = sqlx::query("UPDATE tenant_sessions SET last_seen_at=now() WHERE token_hash=$1")
+            .bind(hash_key(token))
+            .execute(&state.db)
+            .await;
+        Ok(Self {
+            user_id: row.0,
+            tenant_id: row.1,
+            email: row.2,
+            role: row.3,
         })
     }
 }
@@ -870,6 +950,86 @@ async fn platform_logout(
 
 async fn platform_me(auth: PlatformAuth) -> Json<Value> {
     Json(serde_json::json!({"email":auth.email,"role":"superadmin"}))
+}
+
+async fn tenant_login(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<TenantLoginRequest>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
+    let email = request.email.trim().to_lowercase();
+    if email.is_empty() || request.password.len() < 6 {
+        return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
+    }
+    let user = sqlx::query_as::<_, TenantUserRecord>(
+        "SELECT id,tenant_id,unit_id,email,password_hash,role FROM tenant_users WHERE email=$1 AND active=true",
+    )
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "credenciais inválidas"))?;
+    let parsed = PasswordHash::new(&user.password_hash).map_err(|_| {
+        error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "credencial de usuário inválida",
+        )
+    })?;
+    Argon2::default()
+        .verify_password(request.password.as_bytes(), &parsed)
+        .map_err(|_| error(StatusCode::UNAUTHORIZED, "credenciais inválidas"))?;
+
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    sqlx::query("DELETE FROM tenant_sessions WHERE expires_at<=now()")
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    sqlx::query("INSERT INTO tenant_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '7 days')")
+        .bind(hash_key(&token))
+        .bind(user.id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE tenant_users SET last_login_at=now() WHERE id=$1")
+        .bind(user.id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::SET_COOKIE, tenant_session_cookie(&token)?);
+    Ok((
+        headers,
+        Json(serde_json::json!({
+            "email": user.email,
+            "role": user.role,
+            "tenant_id": user.tenant_id,
+            "unit_id": user.unit_id,
+        })),
+    ))
+}
+
+async fn tenant_logout(
+    State(state): State<Arc<AppState>>,
+    auth: TenantAuth,
+    headers: HeaderMap,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
+    let token = tenant_cookie(&headers)?;
+    sqlx::query("DELETE FROM tenant_sessions WHERE token_hash=$1 AND user_id=$2")
+        .bind(hash_key(token))
+        .bind(auth.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::SET_COOKIE, expired_tenant_session_cookie());
+    Ok((response_headers, Json(serde_json::json!({"ok":true}))))
+}
+
+async fn tenant_me(auth: TenantAuth) -> Json<Value> {
+    Json(serde_json::json!({
+        "email": auth.email,
+        "role": auth.role,
+        "tenant_id": auth.tenant_id,
+    }))
 }
 
 async fn platform_tenants(
@@ -2072,7 +2232,17 @@ async fn bootstrap(pool: &PgPool) -> Result<(), sqlx::Error> {
                 .bind(tenant_id).bind(seed_unit_id).bind(ean).bind(local_price).bind((initial_stock * 0.2).max(2.0)).execute(&mut *tx).await?;
         }
     }
-    tx.commit().await
+    let _ = tx.commit().await;
+    // Usuários de demonstração para login web do tenant (dono e caixa)
+    let dono_hash = password_hash("Comercio2024!")
+        .map_err(|_| sqlx::Error::Protocol("hash inválido".into()))?;
+    let caixa_hash =
+        password_hash("Caixa2024!").map_err(|_| sqlx::Error::Protocol("hash inválido".into()))?;
+    sqlx::query("INSERT INTO tenant_users(tenant_id,email,password_hash,role,active,must_change_password) VALUES($1,$2,$3,'owner',true,false) ON CONFLICT(tenant_id,email) DO UPDATE SET password_hash=excluded.password_hash,role=excluded.role,active=true")
+        .bind(tenant_id).bind("dono@mercadinho.com.br").bind(dono_hash).execute(pool).await?;
+    sqlx::query("INSERT INTO tenant_users(tenant_id,unit_id,email,password_hash,role,active,must_change_password) VALUES($1,$2,$3,'cashier',true,false) ON CONFLICT(tenant_id,email) DO UPDATE SET password_hash=excluded.password_hash,unit_id=excluded.unit_id,role=excluded.role,active=true")
+        .bind(tenant_id).bind(unit_id).bind("caixa@mercadinho.com.br").bind(caixa_hash).execute(pool).await?;
+    Ok(())
 }
 
 fn env_uuid(name: &str, default: &str) -> Uuid {
@@ -2099,6 +2269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/platform/auth/login", post(platform_login))
         .route("/api/v1/platform/auth/logout", post(platform_logout))
         .route("/api/v1/platform/me", get(platform_me))
+        .route("/api/v1/auth/login", post(tenant_login))
+        .route("/api/v1/auth/logout", post(tenant_logout))
+        .route("/api/v1/auth/me", get(tenant_me))
         .route("/api/v1/commercial/leads", post(commercial_lead))
         .route(
             "/api/v1/platform/commercial/catalog",
