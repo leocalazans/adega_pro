@@ -1,3 +1,5 @@
+import type { TenantBranding } from "../../src-shared/types";
+
 let _apiBaseOverride: string | null = null;
 
 export function setApiBaseOverride(url: string | null): void {
@@ -88,10 +90,14 @@ export async function syncStatus(): Promise<{ online: boolean; pending: number; 
 export async function listPromotions(): Promise<any[]> {
   return apiFetch("/api/v1/platform/commercial/catalog");
 }
-export async function cloudSaveOwnerBranding(displayName: string, logoDataUrl: string): Promise<any> {
+export async function cloudOwnerBranding(): Promise<TenantBranding> {
+  return apiFetch<TenantBranding>("/api/v1/owner/branding");
+}
+
+export async function cloudSaveOwnerBranding(displayName: string, logoDataUrl: string, primaryColor?: string | null): Promise<any> {
   return apiFetch("/api/v1/owner/branding", {
     method: "POST",
-    body: JSON.stringify({ displayName, logoDataUrl: logoDataUrl || null }),
+    body: JSON.stringify({ displayName, logoDataUrl: logoDataUrl || null, primaryColor: primaryColor || null }),
   });
 }
 
@@ -116,3 +122,4 @@ export async function cloudOwnerOverview(from: number, to: number): Promise<any>
 export async function getDisplaySettings(): Promise<any> {
   return apiFetch("/api/v1/display/settings");
 }
+

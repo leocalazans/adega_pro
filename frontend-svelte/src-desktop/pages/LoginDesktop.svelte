@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { LockKeyhole, ShieldCheck, Store, UserRound, Monitor } from "@lucide/svelte";
-  import { loginEmployee, changeOwnPassword } from "../lib/tauri.desktop";
+  import { loginEmployee, changeOwnPassword, cloudOwnerBranding } from "../lib/tauri.desktop";
   import type { UserSession } from "../../src-shared/types";
 
   let { onLogin, storeName = "CommerceCTRL" }: { onLogin: (session: UserSession) => void; storeName?: string } = $props();
@@ -15,6 +15,21 @@
   let firstAccess = $state(false);
   let busy = $state(false);
   let error = $state("");
+  let brandColor = $state("#0D5C3A");
+
+  onMount(async () => {
+    try {
+      const branding = await cloudOwnerBranding();
+      brandColor = branding.primary_color || "#0D5C3A";
+      storeName = branding.display_name || storeName;
+      const base = brandColor.replace("#", "");
+      const r = parseInt(base.substring(0, 2), 16);
+      const g = parseInt(base.substring(2, 4), 16);
+      const b = parseInt(base.substring(4, 6), 16);
+      const darker = `rgb(${Math.max(0, r - 20)},${Math.max(0, g - 20)},${Math.max(0, b - 20)})`;
+      document.documentElement.style.setProperty("--rail-gradient", `linear-gradient(135deg, ${darker}, ${brandColor})`);
+    } catch {}
+  });
 
   async function submit() {
     busy = true;
@@ -144,7 +159,7 @@
     padding: clamp(28px, 5vw, 68px);
     display: flex;
     flex-direction: column;
-    background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+    background: var(--rail-gradient);
     color: #fff;
   }
 

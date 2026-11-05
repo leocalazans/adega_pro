@@ -50,7 +50,7 @@ export interface UnitSalesReport { unit_id: string; unit_name: string; sales_cou
 export interface OwnerUnitReport extends UnitSalesReport { unit_code: string; stock_skus: number; low_stock_skus: number }
 export interface OwnerTopProductReport { ean: string; description: string; qty_sold: number; revenue_brl_cents: number; units_sold_in: number }
 export interface OwnerOverview { total_brl_cents: number; sales_count: number; units: OwnerUnitReport[]; top_products: OwnerTopProductReport[] }
-export interface TenantBranding { display_name: string; logo_data_url?: string | null }
+export interface TenantBranding { display_name: string; logo_data_url?: string | null; primary_color?: string | null }
 export interface LocalDisplayLink { url: string; port: number; note: string }
 export interface RadioStation { name: string; url: string }
 export interface DisplaySettings { layout: "promotions" | "video"; youtube_id?: string | null; radios: RadioStation[]; selected_radio_url?: string | null; promotion_interval_seconds: number }

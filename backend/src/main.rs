@@ -371,12 +371,14 @@ struct DisplayChannelCreated {
 struct TenantBranding {
     display_name: String,
     logo_data_url: Option<String>,
+    primary_color: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TenantBrandingInput {
     display_name: String,
     logo_data_url: Option<String>,
+    primary_color: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -2092,7 +2094,7 @@ async fn owner_branding(
     auth: OwnerAuth,
 ) -> Result<Json<TenantBranding>, ApiError> {
     let branding = sqlx::query_as::<_, TenantBranding>(
-        "SELECT display_name,logo_data_url FROM tenant_branding WHERE tenant_id=$1",
+        "SELECT display_name,logo_data_url,primary_color FROM tenant_branding WHERE tenant_id=$1",
     )
     .bind(auth.tenant_id)
     .fetch_optional(&state.db)
@@ -2101,6 +2103,7 @@ async fn owner_branding(
     .unwrap_or(TenantBranding {
         display_name: "Mercadinho Martins".into(),
         logo_data_url: None,
+        primary_color: Some("#0D5C3A".into()),
     });
     Ok(Json(branding))
 }
@@ -2124,8 +2127,19 @@ async fn save_owner_branding(
             "logo inválida ou maior que 2 MB",
         ));
     }
-    let branding = sqlx::query_as::<_, TenantBranding>("INSERT INTO tenant_branding(tenant_id,display_name,logo_data_url) VALUES($1,$2,$3) ON CONFLICT(tenant_id) DO UPDATE SET display_name=excluded.display_name,logo_data_url=excluded.logo_data_url,updated_at=now() RETURNING display_name,logo_data_url")
-        .bind(auth.tenant_id).bind(name).bind(input.logo_data_url).fetch_one(&state.db).await.map_err(internal)?;
+    if let Some(cor) = &input.primary_color {
+        if !cor.is_empty() && !cor.starts_with('#') {
+            return Err(error(StatusCode::BAD_REQUEST, "cor deve começar com #"));
+        }
+        if cor.len() != 7 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "cor deve estar no formato #RRGGBB",
+            ));
+        }
+    }
+    let branding = sqlx::query_as::<_, TenantBranding>("INSERT INTO tenant_branding(tenant_id,display_name,logo_data_url,primary_color) VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id) DO UPDATE SET display_name=excluded.display_name,logo_data_url=excluded.logo_data_url,primary_color=excluded.primary_color,updated_at=now() RETURNING display_name,logo_data_url,primary_color")
+        .bind(auth.tenant_id).bind(name).bind(input.logo_data_url).bind(input.primary_color).fetch_one(&state.db).await.map_err(internal)?;
     Ok(Json(branding))
 }
 
@@ -2512,3 +2526,4 @@ mod tests {
         assert_eq!(default_grace_days(), 15);
     }
 }
+

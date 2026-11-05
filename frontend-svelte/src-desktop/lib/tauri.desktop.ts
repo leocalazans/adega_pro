@@ -293,8 +293,8 @@ export async function cloudOwnerOverview(from: number, to: number): Promise<Owne
 export async function cloudOwnerBranding(): Promise<TenantBranding> {
   return invoke("cloud_owner_branding");
 }
-export async function cloudSaveOwnerBranding(displayName: string, logoDataUrl: string): Promise<TenantBranding> {
-  return invoke("cloud_save_owner_branding", { displayName, logoDataUrl: logoDataUrl || null });
+export async function cloudSaveOwnerBranding(displayName: string, logoDataUrl: string, primaryColor?: string | null): Promise<TenantBranding> {
+  return invoke("cloud_save_owner_branding", { displayName, logoDataUrl: logoDataUrl || null, primaryColor: primaryColor || null });
 }
 export async function localDisplayLink(): Promise<LocalDisplayLink> {
   return invoke("local_display_link");
@@ -323,3 +323,5 @@ export async function activationStatus(): Promise<ActivationStatus> {
 export async function claimActivation(code: string, terminalName: string, apiUrl?: string): Promise<ActivationStatus> {
   return invoke("claim_activation", { request: { code, terminal_name: terminalName, api_url: apiUrl || null } });
 }
+
+

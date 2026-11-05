@@ -1,10 +1,11 @@
-import { LayoutDashboard, FileText, BadgePercent, Tv2, ShieldCheck, Store, UserRound, Mail } from "@lucide/svelte";
+import { LayoutDashboard, FileText, BadgePercent, Tv2, ShieldCheck, Store, UserRound, Mail, Settings } from "@lucide/svelte";
 
 export const routes = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, permission: "reports" },
   { href: "/reports", label: "Relatórios", icon: FileText, permission: "reports" },
   { href: "/promotions", label: "Promoções", icon: BadgePercent, permission: "promotions" },
   { href: "/display", label: "Modo TV", icon: Tv2, permission: "display" },
+  { href: "/settings", label: "Configurações", icon: Settings, permission: "*" },
 ] as const;
 
 export const publicRoutes = [

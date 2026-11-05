@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Menu, Moon, Sun, PanelLeftClose, PanelLeftOpen, CircleUserRound } from "@lucide/svelte";
   import { routes, publicRoutes } from "./lib/navigation";
-  import { platformLogout, platformMe, tenantLogout, tenantMe } from "./lib/tauri.web";
+  import { cloudOwnerBranding, platformLogout, platformMe, tenantLogout, tenantMe } from "./lib/tauri.web";
   import type { UserSession } from "../src-shared/types";
   import IconButton from "../src-shared/IconButton.svelte";
   import LoginWeb from "./pages/LoginWeb.svelte";
@@ -14,12 +14,14 @@
   import Privacy from "./pages/Privacy.svelte";
   import Contact from "./pages/Contact.svelte";
   import Reports from "./pages/Reports.svelte";
+  import Settings from "./pages/Settings.svelte";
 
   let path = $state(window.location.pathname);
   let sidebarOpen = $state(false);
   let sidebarCollapsed = $state(false);
   let darkTheme = $state(false);
   let session = $state<UserSession | null>(null);
+  let brandColor = $state("#0D5C3A");
 
   const navigate = (href: string) => {
     history.pushState({}, "", href);
@@ -43,6 +45,17 @@
         }
       });
     }
+    try {
+      cloudOwnerBranding().then((saved) => {
+        brandColor = saved.primary_color || "#0D5C3A";
+        const base = brandColor.replace("#", "");
+        const r = parseInt(base.substring(0, 2), 16);
+        const g = parseInt(base.substring(2, 4), 16);
+        const b = parseInt(base.substring(4, 6), 16);
+        const darker = `rgb(${Math.max(0, r - 20)},${Math.max(0, g - 20)},${Math.max(0, b - 20)})`;
+        document.documentElement.style.setProperty("--rail-gradient", `linear-gradient(135deg, ${darker}, ${brandColor})`);
+      }).catch(() => {});
+    } catch {}
     sidebarCollapsed = window.localStorage.getItem("commercectrl.sidebar.collapsed") === "true";
     darkTheme = window.localStorage.getItem("commercectrl.theme") === "dark";
     document.documentElement.classList.toggle("dark", darkTheme);
@@ -90,7 +103,7 @@
   <LoginWeb storeName="CommerceCTRL" onLogin={loggedIn} />
 {:else}
   <div class="app-shell">
-    <aside class:open={sidebarOpen} class:collapsed={sidebarCollapsed} class="sidebar">
+    <aside class:open={sidebarOpen} class:collapsed={sidebarCollapsed} class="sidebar" style="background: var(--rail-gradient)">
       <button class="brand" onclick={() => navigate("/")} aria-label="Ir ao dashboard">
         <span class="brand-mark system-wordmark">_,CTRL</span>
         <span>CommerceCTRL</span>
@@ -131,6 +144,7 @@
         {:else if path === "/reports"}<Reports />
         {:else if path === "/promotions"}<Reports />
         {:else if path === "/display"}<Reports />
+        {:else if path === "/settings"}<Settings />
         {:else}<Reports />
         {/if}
       </main>

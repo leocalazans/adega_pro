@@ -1,388 +1,379 @@
 <!doctype html>
 <html lang="pt-BR">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CommerceCTRL PDV — Login do Caixa</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700;900&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --primary: #0D5C3A;
-      --primary-dark: #0A462A;
-      --primary-wash: #E8F3EC;
-      --accent: #D4F631;
-      --accent-wash: #F3FDE8;
-      --paper: #F5F3E9;
-      --surface: #ffffff;
-      --ticket: #fffdf7;
-      --ink: #1a1e3c;
-      --muted: #5b6080;
-      --line: #d3d7ec;
-      --danger: #b3263a;
-      --danger-ink: #e14928;
-      --danger-wash: #fff1b5;
-      --success: #0D5C3A;
-      --warning-ink: #7a5200;
-      --warning-wash: #fff4d6;
-      --radius-sm: 8px;
-      --radius-md: 12px;
-      --radius-lg: 18px;
-      --shadow-data: 0 1px 2px rgba(13, 92, 58, 0.08);
-      --shadow-lifted: 0 12px 28px rgba(13, 92, 58, 0.14);
-      --focus-ring: 0 0 0 3px rgba(212, 246, 49, 0.28);
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-width: 320px; min-height: 100vh; font-family: Inter, system-ui, sans-serif; }
-    h1, h2, h3, p { margin: 0; }
-    h1, h2, h3, .brand { font-family: "Space Grotesk", sans-serif; }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0D5C3A" />
+    <title>CommerceCTRL PDV - Login</title>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
 
-    .access-shell {
-      min-height: 100vh;
-      display: grid;
-      grid-template-columns: minmax(360px, 1.05fr) minmax(440px, .95fr);
-      background: var(--paper);
-      color: var(--ink);
-    }
+      :root {
+        --primary: #0D5C3A;
+        --primary-dark: #0A462A;
+        --primary-wash: #E8F3EC;
+        --accent: #D4F631;
+        --accent-wash: #F3FDE8;
+        --paper: #F5F3E9;
+        --surface: #ffffff;
+        --ink: #1a1e3c;
+        --muted: #5b6080;
+        --line: #d3d7ec;
+        --danger-ink: #e14928;
+        --danger-wash: #fff1b5;
+      }
 
-    .store-rail {
-      min-height: 100vh;
-      padding: clamp(28px, 5vw, 68px);
-      display: flex;
-      flex-direction: column;
-      background: linear-gradient(135deg, var(--primary-dark), var(--primary));
-      color: #fff;
-    }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; font-family: Inter, system-ui, sans-serif; }
 
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-weight: 800;
-      letter-spacing: -.03em;
-      font-family: "Space Grotesk", sans-serif;
-    }
+      .access-shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: minmax(360px, 1.05fr) minmax(440px, .95fr);
+        background: var(--paper);
+        color: var(--ink);
+      }
 
-    .brand-mark {
-      display: inline-grid;
-      place-items: center;
-      width: 38px;
-      height: 32px;
-      background: var(--accent);
-      color: var(--primary-dark);
-      font: 900 17px/1 "Space Grotesk", monospace;
-      letter-spacing: -.13em;
-      border-radius: 8px;
-    }
+      .store-rail {
+        min-height: 100vh;
+        padding: clamp(28px, 5vw, 68px);
+        display: flex;
+        flex-direction: column;
+        background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+        color: #fff;
+      }
 
-    .rail-copy {
-      max-width: 530px;
-      margin: auto 0 42px;
-    }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 800;
+        letter-spacing: -.03em;
+        font-family: "Space Grotesk", sans-serif;
+      }
 
-    .rail-copy p {
-      margin: 0;
-      color: rgba(255,255,255,.7);
-      font-size: 12px;
-      font-weight: 750;
-      letter-spacing: .05em;
-      text-transform: uppercase;
-    }
+      .brand-mark {
+        display: inline-grid;
+        place-items: center;
+        width: 38px;
+        height: 32px;
+        background: var(--accent);
+        color: var(--primary-dark);
+        font: 900 17px/1 "Space Grotesk", monospace;
+        letter-spacing: -.13em;
+        border-radius: 8px;
+      }
 
-    .rail-copy h1 {
-      margin: 14px 0 0;
-      font: 700 clamp(42px, 6vw, 78px) / .95 "Space Grotesk", sans-serif;
-      letter-spacing: -.075em;
-      line-height: .94;
-    }
+      .rail-copy {
+        max-width: 530px;
+        margin: auto;
+      }
 
-    .status-card {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      width: max-content;
-      max-width: 100%;
-      padding: 12px 15px;
-      background: rgba(255,255,255,.08);
-      border: 1px solid rgba(255,255,255,.15);
-      border-radius: 12px;
-    }
+      .rail-copy p {
+        margin: 0;
+        color: rgba(255,255,255,.7);
+        font-size: 12px;
+        font-weight: 750;
+        letter-spacing: .05em;
+        text-transform: uppercase;
+      }
 
-    .status-card strong, .status-card small { display: block; }
-    .status-card strong { font-size: 12px; font-weight: 700; }
-    .status-card small { margin-top: 3px; color: rgba(255,255,255,.65); font-size: 11px; }
+      .rail-copy h1 {
+        margin: 14px 0 0;
+        font: 700 clamp(42px, 6vw, 78px) / .95 "Space Grotesk", sans-serif;
+        letter-spacing: -.075em;
+        line-height: .94;
+      }
 
-    .pulse {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 0 5px rgba(212, 246, 49, .25);
-      animation: pulse 2s ease-in-out infinite;
-    }
+      .status-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: max-content;
+        max-width: 100%;
+        padding: 12px 15px;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.15);
+        border-radius: 12px;
+        margin-top: auto;
+      }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: .6; transform: scale(.9); }
-    }
+      .status-card strong { display: block; font-size: 12px; font-weight: 700; }
+      .status-card small { margin-top: 3px; color: rgba(255,255,255,.65); font-size: 11px; }
 
-    .access-panel {
-      align-self: center;
-      justify-self: center;
-      width: min(440px, calc(100vw - 48px));
-      padding: 0 8px;
-    }
+      .pulse {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 5px rgba(212, 246, 49, .25);
+        animation: pulse 2s ease-in-out infinite;
+      }
 
-    .panel-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 48px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-    }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: .6; transform: scale(.9); }
+      }
 
-    .terminal-chip {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      color: var(--primary);
-    }
+      .access-panel {
+        align-self: center;
+        justify-self: center;
+        width: min(440px, calc(100vw - 48px));
+        padding: 0 8px;
+      }
 
-    .store-context {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      margin-bottom: 34px;
-    }
+      .panel-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 48px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
 
-    .store-seal {
-      display: grid;
-      place-items: center;
-      width: 52px;
-      height: 52px;
-      background: var(--primary-wash);
-      color: var(--primary);
-      border-radius: 14px;
-    }
+      .terminal-chip {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--primary);
+      }
 
-    .store-context h2 {
-      margin: 4px 0 0;
-      font: 650 25px/1.05 "Space Grotesk", sans-serif;
-      letter-spacing: -.045em;
-    }
+      .store-context {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 34px;
+      }
 
-    .store-context p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-    }
+      .store-seal {
+        display: grid;
+        place-items: center;
+        width: 52px;
+        height: 52px;
+        background: var(--primary-wash);
+        color: var(--primary);
+        border-radius: 14px;
+      }
 
-    .access-panel form {
-      display: grid;
-      gap: 18px;
-    }
+      .store-context h2 {
+        margin: 4px 0 0;
+        font: 650 25px/1.05 "Space Grotesk", sans-serif;
+        letter-spacing: -.045em;
+      }
 
-    .access-panel form header {
-      margin-bottom: 8px;
-    }
+      .store-context p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
 
-    .access-panel h3 {
-      margin: 0;
-      font: 650 32px/1 "Space Grotesk", sans-serif;
-      letter-spacing: -.06em;
-      color: var(--ink);
-    }
+      .access-panel form {
+        display: grid;
+        gap: 18px;
+      }
 
-    .access-panel header p {
-      margin: 6px 0 0;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.5;
-    }
+      .access-panel header {
+        margin-bottom: 8px;
+      }
 
-    .access-panel label {
-      display: grid;
-      gap: 7px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-    }
+      .access-panel h3 {
+        margin: 0;
+        font: 650 32px/1 "Space Grotesk", sans-serif;
+        letter-spacing: -.06em;
+        color: var(--ink);
+      }
 
-    .input-wrap {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 0 14px;
-      height: 48px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: var(--surface);
-      transition: border-color .15s, box-shadow .15s;
-    }
+      .access-panel header p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
 
-    .input-wrap:focus-within {
-      border-color: var(--primary);
-      box-shadow: var(--focus-ring);
-    }
+      .access-panel label {
+        display: grid;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
 
-    .input-wrap svg {
-      color: var(--muted);
-      flex-shrink: 0;
-    }
+      .input-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 14px;
+        height: 48px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+        transition: border-color .15s, box-shadow .15s;
+      }
 
-    .input-wrap input {
-      flex: 1;
-      height: 100%;
-      border: 0;
-      outline: 0;
-      background: transparent;
-      color: var(--ink);
-      font: 500 15px Inter, sans-serif;
-    }
+      .input-wrap:focus-within {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(13, 92, 58, .28);
+      }
 
-    .input-wrap input::placeholder {
-      color: var(--line);
-    }
+      .input-wrap svg { color: var(--muted); flex-shrink: 0; }
+      .input-wrap input {
+        flex: 1; height: 100%; border: 0; outline: 0;
+        background: transparent; color: var(--ink);
+        font: 500 15px Inter, sans-serif;
+      }
+      .input-wrap input::placeholder { color: var(--line); }
 
-    .error {
-      margin: 0;
-      padding: 12px 14px;
-      border-radius: 10px;
-      background: var(--danger-wash);
-      color: var(--danger-ink);
-      font-size: 13px;
-      font-weight: 600;
-      border: 1px solid #fecaca;
-    }
+      .error {
+        margin: 0;
+        padding: 12px 14px;
+        border-radius: 10px;
+        background: var(--danger-wash);
+        color: var(--danger-ink);
+        font-size: 13px;
+        font-weight: 600;
+        border: 1px solid #fecaca;
+      }
 
-    .access-panel button {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      height: 48px;
-      padding: 0 20px;
-      border: 0;
-      border-radius: 10px;
-      background: var(--primary);
-      color: #fff;
-      font: 700 15px Inter, sans-serif;
-      cursor: pointer;
-      transition: background .15s, transform .05s;
-    }
+      .access-panel button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        height: 48px;
+        padding: 0 20px;
+        border: 0;
+        border-radius: 10px;
+        background: var(--primary);
+        color: #fff;
+        font: 700 15px Inter, sans-serif;
+        cursor: pointer;
+        transition: background .15s, transform .05s;
+      }
+      .access-panel button:hover:not(:disabled) { background: var(--primary-dark); }
+      .access-panel button:active:not(:disabled) { transform: scale(.99); }
+      .access-panel button:disabled { opacity: .55; cursor: not-allowed; }
 
-    .access-panel button:hover:not(:disabled) {
-      background: var(--primary-dark);
-    }
+      footer {
+        margin-top: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
 
-    .access-panel button:active:not(:disabled) {
-      transform: scale(.99);
-    }
-
-    .access-panel button:disabled {
-      opacity: .55;
-      cursor: not-allowed;
-    }
-
-    footer {
-      margin-top: 32px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-    footer svg {
-      color: var(--success);
-    }
-
-    @media (max-width: 900px) {
-      .access-shell { grid-template-columns: 1fr; }
-      .store-rail { min-height: auto; padding: clamp(24px, 8vw, 48px); text-align: center; }
-      .status-card { margin: 0 auto; }
-      .rail-copy { margin: 24px auto 32px; }
-      .access-panel { padding: 0 20px 40px; }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .pulse { animation: none; }
-      * { transition: none !important; }
-    }
-  </style>
-</head>
-<body>
-  <main class="access-shell">
-    <aside class="store-rail" aria-hidden="true">
-      <div class="brand">
-        <span class="brand-mark">_,CTRL</span>
-        <span>CommerceCTRL</span>
-      </div>
-      <div class="rail-copy">
-        <p>Operação de caixa</p>
-        <h1>O balcão continua, mesmo quando a rede oscila.</h1>
-      </div>
-      <div class="status-card">
-        <span class="pulse"></span>
-        <div>
-          <strong>Terminal protegido</strong>
-          <small>Dados locais e sincronização segura</small>
+      @media (max-width: 900px) {
+        .access-shell { grid-template-columns: 1fr; }
+        .store-rail { min-height: auto; padding: clamp(24px, 8vw, 48px); text-align: center; }
+        .status-card { margin: 0 auto; }
+        .rail-copy { margin: 24px auto 32px; }
+        .access-panel { padding: 0 20px 40px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="access-shell">
+      <aside class="store-rail" aria-hidden="true">
+        <div class="brand">
+          <span class="brand-mark">_,CTRL</span>
+          <span>CommerceCTRL</span>
         </div>
-      </div>
-    </aside>
-
-    <section class="access-panel">
-      <div class="panel-top">
-        <div class="terminal-chip">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-          Terminal de venda
+        <div class="rail-copy">
+          <p>operação <span id="conn-status" style="font-weight:700;">verificando…</span></p>
+          <h1>Mercadinho Martins</h1>
         </div>
-        <span>v0.1.2</span>
-      </div>
+      </aside>
 
-      <div class="store-context">
-        <div class="store-seal">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="2" x2="12" y2="22"></line><path d="M4.93 4.93l9 9 5.64-5.64"></path></svg>
+      <section class="access-panel">
+        <div class="panel-top">
         </div>
-        <div>
-          <p>Você está acessando</p>
-          <h2>Mercadinho Martins</h2>
-        </div>
-      </div>
 
-      <form onsubmit="event.preventDefault()">
-        <header>
-          <h3>Entrar no caixa</h3>
-          <p>Use as credenciais liberadas pelo administrador da loja.</p>
-        </header>
-        <label>
-          Usuário
-          <div class="input-wrap">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-            <input type="text" autocomplete="username" placeholder="Usuário" value="admin" />
+        <div class="store-context">
+          <div class="store-seal" id="store-logo" style="display:none;"></div>
+          <div>
+            <p>Você está acessando</p>
+            <h2 id="store-name">Mercadinho Martins</h2>
           </div>
-        </label>
-        <label>
-          Senha
-          <div class="input-wrap">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-            <input type="password" autocomplete="current-password" placeholder="Senha" />
-          </div>
-        </label>
-        <p class="error" role="alert" style="display:none;">Não foi possível entrar. Verifique suas credenciais.</p>
-        <button type="button">Entrar no terminal</button>
-        <small class="hint">Primeiro acesso: admin / 123456</small>
-      </form>
+        </div>
 
-      <footer>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></svg>
-        Acesso protegido para esta operação.
-      </footer>
-    </section>
-  </main>
-</body>
+        <form onsubmit="event.preventDefault(); alert('Este é apenas o preview visual. No desktop real, o login usa o Tauri (offline-first).');">
+          <header>
+            <h3>Entrar no caixa</h3>
+            <p>Use as credenciais liberadas pelo administrador da loja.</p>
+          </header>
+          <label>
+            Usuário
+            <div class="input-wrap">
+              <span style="color:var(--muted); font-size:18px;">&#128100;</span>
+              <input autocomplete="username" required placeholder="Usuário" />
+            </div>
+          </label>
+          <label>
+            Senha
+            <div class="input-wrap">
+              <span style="color:var(--muted); font-size:18px;">&#128273;</span>
+              <input type="password" autocomplete="current-password" required placeholder="Senha" />
+            </div>
+          </label>
+          <div class="error" id="error" style="display:none;">Usuário ou senha inválidos.</div>
+          <button type="submit">Entrar no terminal</button>
+          <small class="hint" style="text-align:center; color:var(--muted); font-size:11px;">Primeiro acesso: admin / 123456</small>
+        </form>
+
+        <footer style="margin-top: 32px;">
+          <span style="color:var(--success); font-size:16px;">&#10004;</span>
+          Acesso protegido para esta operação.
+        </footer>
+
+        <div style="text-align:center; margin-top: 16px;">
+          <span style="color:var(--muted); font-size:11px;">v0.1.2</span>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      function atualizarConexao() {
+        const el = document.getElementById('conn-status');
+        if (!el) return;
+        if (navigator.onLine) {
+          el.textContent = 'online';
+          el.style.color = 'var(--success)';
+        } else {
+          el.textContent = 'offline';
+          el.style.color = 'var(--danger-ink)';
+        }
+      }
+      window.addEventListener('online', atualizarConexao);
+      window.addEventListener('offline', atualizarConexao);
+      atualizarConexao();
+
+      // Carrega a logo e cor do branding salvo (mesma chave usada pelo app real)
+      try {
+        const saved = JSON.parse(localStorage.getItem('commercectrl.client.branding') ?? 'null');
+        if (saved) {
+          const logoEl = document.getElementById('store-logo');
+          const nameEl = document.getElementById('store-name');
+          const rail = document.querySelector('.store-rail');
+          if (saved.primary_color) {
+            const base = saved.primary_color.replace('#', '');
+            const r = parseInt(base.substring(0, 2), 16);
+            const g = parseInt(base.substring(2, 4), 16);
+            const b = parseInt(base.substring(4, 6), 16);
+            const darker = `rgb(${Math.max(0, r - 20)},${Math.max(0, g - 20)},${Math.max(0, b - 20)})`;
+            rail.style.background = `linear-gradient(135deg, ${darker}, ${saved.primary_color})`;
+          }
+          if (saved.logo) {
+            logoEl.style.display = 'grid';
+            logoEl.innerHTML = `<img src="${saved.logo}" alt="Logo" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;">`;
+            nameEl.style.display = 'none';
+          }
+          if (saved.name) nameEl.textContent = saved.name;
+        }
+      } catch {}
+    </script>
+  </body>
 </html>

@@ -46,6 +46,7 @@
   let activationChecked = $state(false);
   let terminalActivated = $state(false);
   let activationApiUrl = $state("");
+  let brandColor = $state("#0D5C3A");
 
   const navigate = (href: string) => {
     history.pushState({}, "", href);
@@ -53,7 +54,7 @@
     sidebarOpen = false;
   };
 
-  onMount(() => {
+  onMount(async () => {
     isDesktop = inTauri();
     if (isDesktop) {
       activationStatus().then((value) => {
@@ -72,6 +73,16 @@
     const brandingChanged = (event: Event) => applyBranding((event as CustomEvent<{ name: string; logo: string }>).detail);
     window.addEventListener("commercectrl-branding", brandingChanged);
     if (isDesktop) cloudOwnerBranding().then((saved) => { const branding = { name: saved.display_name, logo: saved.logo_data_url || "" }; localStorage.setItem("commercectrl.client.branding", JSON.stringify(branding)); applyBranding(branding); window.dispatchEvent(new CustomEvent("commercectrl-branding", { detail: branding })) }).catch(() => { });
+    try {
+      const branding = await cloudOwnerBranding();
+      brandColor = branding.primary_color || "#0D5C3A";
+      const base = brandColor.replace("#", "");
+      const r = parseInt(base.substring(0, 2), 16);
+      const g = parseInt(base.substring(2, 4), 16);
+      const b = parseInt(base.substring(4, 6), 16);
+      const darker = `rgb(${Math.max(0, r - 20)},${Math.max(0, g - 20)},${Math.max(0, b - 20)})`;
+      document.documentElement.style.setProperty("--rail-gradient", `linear-gradient(135deg, ${darker}, ${brandColor})`);
+    } catch {}
     const pop = () => (path = window.location.pathname);
     window.addEventListener("popstate", pop);
     const poll = async () => {
@@ -144,7 +155,7 @@
   <LoginDesktop storeName={clientName} onLogin={loggedIn} />
 {:else}
   <div class="app-shell">
-    <aside class:open={sidebarOpen} class:collapsed={sidebarCollapsed || isPosRoute} class:pos-dock={isPosRoute} class="sidebar">
+    <aside class:open={sidebarOpen} class:collapsed={sidebarCollapsed || isPosRoute} class:pos-dock={isPosRoute} class="sidebar" style="background: var(--rail-gradient)">
       <button class="brand" onclick={() => navigate("/")} aria-label="Ir ao dashboard">
         <span class="brand-mark system-wordmark">_,CTRL</span>
         <span>CommerceCTRL</span>

@@ -11,6 +11,7 @@
   let storeName = $state("Mercadinho Martins");
   let storeLogo = $state("");
   let brandMessage = $state("");
+  let brandColor = $state("#0D5C3A");
   let printers = $state<PrinterInfo[]>([]);
   let printer = $state<PrinterConfig>({mode:"auto",windows_printer:null,escpos_host:null,escpos_port:9100,local_port:null,prefer_escpos:true,print_logo:true});
   let printerMessage = $state("");
@@ -57,11 +58,11 @@
     } catch (error) { brandMessage = error instanceof Error ? error.message : String(error); }
   }
   async function saveBranding() {
-    const branding = { name: storeName.trim() || "Mercadinho Martins", logo: storeLogo };
+    const branding = { name: storeName.trim() || "Mercadinho Martins", logo: storeLogo, primary_color: brandColor || "#0D5C3A" };
     busy = true; brandMessage = "";
     try {
-      const saved = await cloudSaveOwnerBranding(branding.name, branding.logo);
-      const cached = { name: saved.display_name, logo: saved.logo_data_url || "" };
+      const saved = await cloudSaveOwnerBranding(branding.name, branding.logo, branding.primary_color);
+      const cached = { name: saved.display_name, logo: saved.logo_data_url || "", primary_color: saved.primary_color || "#0D5C3A" };
       localStorage.setItem("commercectrl.client.branding", JSON.stringify(cached));
       window.dispatchEvent(new CustomEvent("commercectrl-branding", { detail: cached }));
       brandMessage = "Identidade salva no tenant e sincronizada neste terminal.";
@@ -74,8 +75,8 @@
   async function backup(){try{backupMessage=`Backup verificado: ${await createTerminalBackup()}`}catch(e){backupMessage=String(e)}}
   async function restore(){if(!restorePath.trim())return;try{await scheduleTerminalRestore(restorePath.trim());backupMessage="Restauração preparada. Reinicie o aplicativo para aplicar."}catch(e){backupMessage=String(e)}}
   onMount(() => {
-    try { const saved = JSON.parse(localStorage.getItem("commercectrl.client.branding") ?? "null"); if (saved) { storeName = saved.name || storeName; storeLogo = saved.logo || ""; } } catch {}
-    cloudOwnerBranding().then((saved)=>{storeName=saved.display_name;storeLogo=saved.logo_data_url||"";const cached={name:storeName,logo:storeLogo};localStorage.setItem("commercectrl.client.branding",JSON.stringify(cached));window.dispatchEvent(new CustomEvent("commercectrl-branding",{detail:cached}))}).catch(()=>{});
+    try { const saved = JSON.parse(localStorage.getItem("commercectrl.client.branding") ?? "null"); if (saved) { storeName = saved.name || storeName; storeLogo = saved.logo || ""; brandColor = saved.primary_color || brandColor; } } catch {}
+    cloudOwnerBranding().then((saved)=>{storeName=saved.display_name;storeLogo=saved.logo_data_url||"";brandColor=saved.primary_color||"#0D5C3A";const cached={name:storeName,logo:storeLogo,primary_color:brandColor};localStorage.setItem("commercectrl.client.branding",JSON.stringify(cached));window.dispatchEvent(new CustomEvent("commercectrl-branding",{detail:cached}))}).catch(()=>{});
     load().catch((error) => message = String(error));
     Promise.all([listPrinters(),getPrinterConfig()]).then(([found,saved])=>{printers=found;printer=saved}).catch(e=>printerMessage=String(e));
   });
@@ -93,7 +94,7 @@
     {#if printer.mode==="smartpos"}<p class="wide notice">Smart POS exige o aplicativo/SDK do adquirente instalado. Este conector será ativado ao informar o modelo e fabricante do equipamento.</p>{/if}
     <div class="wide actions"><button class="button" disabled={busy} onclick={savePrinting}>Salvar impressão</button><button class="button secondary" onclick={printTest}>Imprimir teste</button></div>{#if printerMessage}<p class="wide notice">{printerMessage}</p>{/if}
   </div></article>
-  <article class="card"><div class="card-header"><div><h2>Identidade do cliente</h2><p class="small muted">Nome e logo exibidos no PDV deste terminal.</p></div><ImageUp size={20}/></div><div class="card-body branding"><label>Nome do mercado<input class="input" maxlength="80" bind:value={storeName}/></label><label>Logo do mercado<input class="input" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onchange={chooseLogo}/></label>{#if storeLogo}<div class="logo-preview"><img src={storeLogo} alt="Prévia da logo"/><button class="button secondary" onclick={()=>storeLogo=""}>Remover imagem</button></div>{/if}<button class="button" onclick={saveBranding}>Salvar identidade</button>{#if brandMessage}<p class="notice">{brandMessage}</p>{/if}</div></article>
+  <article class="card"><div class="card-header"><div><h2>Identidade do cliente</h2><p class="small muted">Nome, logo e cor da marca exibidos no PDV deste terminal.</p></div><ImageUp size={20}/></div><div class="card-body branding"><label>Nome do mercado<input class="input" maxlength="80" bind:value={storeName}/></label><label>Cor primária<input class="input" type="color" bind:value={brandColor}/></label><label>Logo do mercado<input class="input" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onchange={chooseLogo}/></label>{#if storeLogo}<div class="logo-preview"><img src={storeLogo} alt="Prévia da logo"/><button class="button secondary" onclick={()=>storeLogo=""}>Remover imagem</button></div>{/if}<button class="button" onclick={saveBranding}>Salvar identidade</button>{#if brandMessage}<p class="notice">{brandMessage}</p>{/if}</div></article>
   <article class="card">
     <div class="card-header"><div><h2>Licenciamento</h2><p class="small muted">Validação assinada e operação offline com carência.</p></div><KeyRound size={20}/></div>
     <div class="card-body settings-grid">
