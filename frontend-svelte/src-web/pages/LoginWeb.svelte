@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { LockKeyhole, ShieldCheck, Mail, Globe } from "@lucide/svelte";
+  import { Lock, ShieldCheck, User, Globe } from "@lucide/svelte";
   import { tenantLogin, tenantMe, cloudOwnerBranding } from "../lib/tauri.web";
   import type { UserSession } from "../../src-shared/types";
 
@@ -125,7 +125,7 @@
           <input type="password" minlength="8" required autocomplete="new-password" bind:value={confirmation} />
         </label>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
-        <button disabled={busy}><LockKeyhole size={18} /> {busy ? "Salvando…" : "Salvar e acessar"}</button>
+        <button disabled={busy}><Lock size={18} /> {busy ? "Salvando…" : "Salvar e acessar"}</button>
       </form>
     {:else}
       <form onsubmit={(event) => { event.preventDefault(); submit(); }}>
@@ -135,11 +135,11 @@
         </header>
         <label>
           E-mail
-          <div class="input-wrap"><Mail size={18} /><input type="email" autocomplete="email" required bind:value={email} /></div>
+          <div class="input-wrap"><User size={18} /><input type="email" autocomplete="email" required bind:value={email} /></div>
         </label>
         <label>
           Senha
-          <div class="input-wrap"><LockKeyhole size={18} /><input type="password" autocomplete="current-password" required bind:value={password} /></div>
+          <div class="input-wrap"><Lock size={18} /><input type="password" autocomplete="current-password" required bind:value={password} /></div>
         </label>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
         <button disabled={busy}>
