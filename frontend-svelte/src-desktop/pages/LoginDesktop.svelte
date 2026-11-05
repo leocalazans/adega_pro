@@ -345,8 +345,8 @@
     margin: 0;
     padding: 12px 14px;
     border-radius: 10px;
-    background: #fef2f2;
-    color: var(--danger);
+    background: var(--danger-wash);
+    color: var(--danger-ink);
     font-size: 13px;
     font-weight: 600;
     border: 1px solid #fecaca;
