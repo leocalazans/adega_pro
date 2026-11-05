@@ -335,6 +335,13 @@ fn exit_kiosk_as_admin(
         .verify_password(pin.as_bytes(), &parsed)
         .map_err(|_| "Senha administrativa inválida")?;
     state.authorize_kiosk_exit();
+
+    // Restaura a resolução de vídeo antes de encerrar: sai do fullscreen do Windows
+    // para evitar que o Windows 11 fique travado em 800x600 após o fechamento do PDV.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_fullscreen(false);
+    }
+
     app.exit(0);
     Ok(())
 }

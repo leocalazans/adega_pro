@@ -21,7 +21,7 @@
         "decorations": false,
         "transparent": false,
         "maximized": true,
-        "fullscreen": true,
+        "fullscreen": false,
         "alwaysOnTop": true
       }
     ],
