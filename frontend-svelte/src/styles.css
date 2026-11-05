@@ -6,28 +6,28 @@
   background: #e8eaf6;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  /* Blueprint CommerceCTRL: azul profundo, fundo dessaturado, roxo de ação. */
-  --primary: #3f51b5;
-  --primary-dark: #303da3;
-  --primary-wash: #e2e5f8;
-  --accent: #7e57c2;
-  --accent-wash: #ece5f8;
-  --paper: #e8eaf6;
+  /* Identidade CommerceCTRL: creme acolhedor, verde floresta, verde lima. */
+  --primary: #0D5C3A;
+  --primary-dark: #0A462A;
+  --primary-wash: #E8F3EC;
+  --accent: #D4F631;
+  --accent-wash: #F3FDE8;
+  --paper: #F5F3E9;
   --surface: #ffffff;
   --ticket: #fffdf7;
   --ink: #1a1e3c;
   --muted: #5b6080;
   --line: #d3d7ec;
   --danger: #b3263a;
-  --success: #0f6b4a;
+  --success: #0D5C3A;
   --warning-ink: #7a5200;
   --warning-wash: #fff4d6;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 18px;
-  --shadow-data: 0 1px 2px rgba(26, 30, 60, 0.08);
-  --shadow-lifted: 0 12px 28px rgba(48, 61, 163, 0.14);
-  --focus-ring: 0 0 0 3px rgba(63, 81, 181, 0.28);
+  --shadow-data: 0 1px 2px rgba(13, 92, 58, 0.08);
+  --shadow-lifted: 0 12px 28px rgba(13, 92, 58, 0.14);
+  --focus-ring: 0 0 0 3px rgba(212, 246, 49, 0.28);
 }
 html.dark { background:#000; color:#f4f4f4; } html.dark body { background:#000; color:#f4f4f4; } html.dark .workspace,html.dark main { background:#000; } html.dark .sidebar { background:#050505; border-color:#252525; backdrop-filter:none; } html.dark .sidebar.pos-dock { background:#050505; border-color:#252525; } html.dark .sidebar .brand { color:#fff; } html.dark .sidebar nav button,html.dark .sidebar .settings { color:#b9c7bd; background:rgba(255,255,255,.035); } html.dark .sidebar nav button:hover,html.dark .sidebar nav button.active,html.dark .sidebar .settings:hover { color:#fff; background:rgba(16,185,129,.2); border-color:rgba(110,231,183,.22); } html.dark .topbar { background:#050505; border-color:#252525; } html.dark .card { background:#0b0b0b; border-color:#292929; color:#f4f4f4; } html.dark .icon-button { background:#111; border-color:#303030; color:#eee; } html.dark .connection { background:#111; color:#c8d2cb; }
 

@@ -163,7 +163,7 @@
     width: 38px;
     height: 32px;
     background: var(--accent);
-    color: #fff;
+    color: var(--primary-dark);
     font: 900 17px/1 "Space Grotesk", monospace;
     letter-spacing: -.13em;
     border-radius: 8px;
@@ -185,7 +185,7 @@
 
   .rail-copy h1 {
     margin: 14px 0 0;
-    font: 650 clamp(42px, 5vw, 76px)/.94 "Space Grotesk", sans-serif;
+    font: 700 clamp(42px, 6vw, 78px) / .95 "Space Grotesk", sans-serif;
     letter-spacing: -.075em;
     line-height: .94;
   }
@@ -211,7 +211,7 @@
     height: 8px;
     border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 0 5px rgba(126, 87, 194, .25);
+    box-shadow: 0 0 0 5px rgba(212, 246, 49, .25);
     animation: pulse 2s ease-in-out infinite;
   }
 
