@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["svelte", "vite/client"]
   },
-  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"]
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte", "src-desktop/**/*.d.ts", "src-desktop/**/*.ts", "src-desktop/**/*.svelte", "src-web/**/*.d.ts", "src-web/**/*.ts", "src-web/**/*.svelte", "src-shared/**/*.d.ts", "src-shared/**/*.ts"]
 }
