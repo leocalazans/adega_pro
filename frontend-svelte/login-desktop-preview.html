@@ -292,14 +292,6 @@
         <div class="panel-top">
         </div>
 
-        <div class="store-context">
-          <div class="store-seal" id="store-logo" style="display:none;"></div>
-          <div>
-            <p>Você está acessando</p>
-            <h2 id="store-name">Mercadinho Martins</h2>
-          </div>
-        </div>
-
         <form onsubmit="event.preventDefault(); alert('Este é apenas o preview visual. No desktop real, o login usa o Tauri (offline-first).');">
           <header>
             <h3>Entrar no caixa</h3>
@@ -351,27 +343,16 @@
       window.addEventListener('offline', atualizarConexao);
       atualizarConexao();
 
-      // Carrega a logo e cor do branding salvo (mesma chave usada pelo app real)
+      // Carrega a cor do branding salvo (mesma chave usada pelo app real)
       try {
         const saved = JSON.parse(localStorage.getItem('commercectrl.client.branding') ?? 'null');
-        if (saved) {
-          const logoEl = document.getElementById('store-logo');
-          const nameEl = document.getElementById('store-name');
-          const rail = document.querySelector('.store-rail');
-          if (saved.primary_color) {
-            const base = saved.primary_color.replace('#', '');
-            const r = parseInt(base.substring(0, 2), 16);
-            const g = parseInt(base.substring(2, 4), 16);
-            const b = parseInt(base.substring(4, 6), 16);
-            const darker = `rgb(${Math.max(0, r - 20)},${Math.max(0, g - 20)},${Math.max(0, b - 20)})`;
-            rail.style.background = `linear-gradient(135deg, ${darker}, ${saved.primary_color})`;
-          }
-          if (saved.logo) {
-            logoEl.style.display = 'grid';
-            logoEl.innerHTML = `<img src="${saved.logo}" alt="Logo" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;">`;
-            nameEl.style.display = 'none';
-          }
-          if (saved.name) nameEl.textContent = saved.name;
+        if (saved?.primary_color) {
+          const base = saved.primary_color.replace('#', '');
+          const r = parseInt(base.substring(0, 2), 16);
+          const g = parseInt(base.substring(2, 4), 16);
+          const b = parseInt(base.substring(4, 6), 16);
+          const darker = `rgb(${Math.max(0, r - 20)},${Math.max(0, g - 20)},${Math.max(0, b - 20)})`;
+          document.querySelector('.store-rail').style.background = `linear-gradient(135deg, ${darker}, ${saved.primary_color})`;
         }
       } catch {}
     </script>

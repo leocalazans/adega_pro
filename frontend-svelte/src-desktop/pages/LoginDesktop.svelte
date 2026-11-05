@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { LockKeyhole, ShieldCheck, Store, UserRound, Monitor } from "@lucide/svelte";
+  import { LockKeyhole, ShieldCheck, UserRound, Monitor } from "@lucide/svelte";
   import { loginEmployee, changeOwnPassword, cloudOwnerBranding } from "../lib/tauri.desktop";
   import type { UserSession } from "../../src-shared/types";
 
@@ -91,14 +91,6 @@
         Terminal de venda
       </div>
       <span>v0.1.2</span>
-    </div>
-
-    <div class="store-context">
-      <div class="store-seal"><Store size={24} /></div>
-      <div>
-        <p>Você está acessando</p>
-        <h2>{storeName}</h2>
-      </div>
     </div>
 
     {#if firstAccess}
