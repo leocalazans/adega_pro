@@ -5,7 +5,7 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{FromRequestParts, Path, Query, State},
+    extract::{connect_info::ConnectInfo, FromRequestParts, Path, Query, State},
     http::{header, request::Parts, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -25,6 +25,15 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
     db: PgPool,
+}
+
+// Rate limiting de login: máximo de 5 tentativas falhadas por email ou IP em 15 minutos.
+const MAX_LOGIN_ATTEMPTS: i64 = 5;
+const LOGIN_RATE_LIMIT_WINDOW_SECS: i64 = 15 * 60;
+
+#[derive(Debug, sqlx::FromRow)]
+struct LoginAttemptRecord {
+    attempts: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -881,14 +890,64 @@ impl FromRequestParts<Arc<AppState>> for TenantAuth {
     }
 }
 
+/// Registra uma tentativa de login no banco e retorna true se ainda está dentro do limite permitido.
+async fn record_login_attempt(
+    state: &Arc<AppState>,
+    email: &str,
+    ip: &str,
+    succeeded: bool,
+    tenant_id: Option<Uuid>,
+) -> Result<(), ApiError> {
+    sqlx::query("INSERT INTO login_attempts(tenant_id,email,ip,succeeded) VALUES($1,$2,$3,$4)")
+        .bind(tenant_id)
+        .bind(email)
+        .bind(ip)
+        .bind(succeeded)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    Ok(())
+}
+
+/// Conta tentativas falhadas recentes para um email ou IP.
+async fn count_recent_failed_attempts(
+    state: &Arc<AppState>,
+    email: &str,
+    ip: &str,
+) -> Result<i64, ApiError> {
+    let row: Option<LoginAttemptRecord> = sqlx::query_as(
+        "SELECT COUNT(*)::bigint AS attempts FROM login_attempts WHERE succeeded=false AND attempted_at > now() - make_interval(secs => $1) AND (email=$2 OR ip=$3)",
+    )
+    .bind(LOGIN_RATE_LIMIT_WINDOW_SECS)
+    .bind(email)
+    .bind(ip)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(row.map(|r| r.attempts).unwrap_or(0))
+}
+
 async fn platform_login(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
     Json(request): Json<PlatformLoginRequest>,
 ) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let email = request.email.trim().to_lowercase();
+    let ip = addr.ip().to_string();
     if email.is_empty() || request.password.len() < 8 {
+        let _ = record_login_attempt(&state, &email, &ip, false, None).await;
         return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
     }
+
+    let failures = count_recent_failed_attempts(&state, &email, &ip).await?;
+    if failures >= MAX_LOGIN_ATTEMPTS {
+        let _ = record_login_attempt(&state, &email, &ip, false, None).await;
+        return Err(error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "muitas tentativas de login; tente novamente mais tarde",
+        ));
+    }
+
     let admin = sqlx::query_as::<_, PlatformAdminRecord>(
         "SELECT id,email,password_hash FROM platform_admins WHERE email=$1 AND active=true",
     )
@@ -903,9 +962,14 @@ async fn platform_login(
             "credencial administrativa inválida",
         )
     })?;
-    Argon2::default()
+    let ok = Argon2::default()
         .verify_password(request.password.as_bytes(), &parsed)
-        .map_err(|_| error(StatusCode::UNAUTHORIZED, "credenciais inválidas"))?;
+        .is_ok();
+    if !ok {
+        let _ = record_login_attempt(&state, &email, &ip, false, None).await;
+        return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
+    }
+    let _ = record_login_attempt(&state, &email, &ip, true, None).await;
 
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     sqlx::query("DELETE FROM platform_sessions WHERE expires_at<=now()")
@@ -953,11 +1017,14 @@ async fn platform_me(auth: PlatformAuth) -> Json<Value> {
 }
 
 async fn tenant_login(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
     Json(request): Json<TenantLoginRequest>,
 ) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let email = request.email.trim().to_lowercase();
+    let ip = addr.ip().to_string();
     if email.is_empty() || request.password.len() < 6 {
+        let _ = record_login_attempt(&state, &email, &ip, false, None).await;
         return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
     }
     let user = sqlx::query_as::<_, TenantUserRecord>(
@@ -968,15 +1035,31 @@ async fn tenant_login(
     .await
     .map_err(internal)?
     .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "credenciais inválidas"))?;
+    let tenant_id = Some(user.tenant_id);
+
+    let failures = count_recent_failed_attempts(&state, &email, &ip).await?;
+    if failures >= MAX_LOGIN_ATTEMPTS {
+        let _ = record_login_attempt(&state, &email, &ip, false, tenant_id).await;
+        return Err(error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "muitas tentativas de login; tente novamente mais tarde",
+        ));
+    }
+
     let parsed = PasswordHash::new(&user.password_hash).map_err(|_| {
         error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "credencial de usuário inválida",
         )
     })?;
-    Argon2::default()
+    let ok = Argon2::default()
         .verify_password(request.password.as_bytes(), &parsed)
-        .map_err(|_| error(StatusCode::UNAUTHORIZED, "credenciais inválidas"))?;
+        .is_ok();
+    if !ok {
+        let _ = record_login_attempt(&state, &email, &ip, false, tenant_id).await;
+        return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
+    }
+    let _ = record_login_attempt(&state, &email, &ip, true, tenant_id).await;
 
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     sqlx::query("DELETE FROM tenant_sessions WHERE expires_at<=now()")
