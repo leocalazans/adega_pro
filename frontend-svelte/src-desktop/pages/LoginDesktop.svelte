@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Lock, ShieldCheck, User, Monitor } from "@lucide/svelte";
+  import { ShieldCheck, Monitor } from "@lucide/svelte";
+  import UserIcon from "../../src-shared/UserIcon.svelte";
+  import PassIcon from "../../src-shared/PassIcon.svelte";
   import { loginEmployee, changeOwnPassword, cloudOwnerBranding } from "../lib/tauri.desktop";
   import type { UserSession } from "../../src-shared/types";
 
@@ -108,7 +110,7 @@
           <input type="password" minlength="8" required autocomplete="new-password" bind:value={confirmation} />
         </label>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
-        <button disabled={busy}><Lock size={18} /> {busy ? "Salvando…" : "Salvar e acessar"}</button>
+        <button disabled={busy}><PassIcon size={18} /> {busy ? "Salvando…" : "Salvar e acessar"}</button>
       </form>
     {:else}
       <form onsubmit={(event) => { event.preventDefault(); submit(); }}>
@@ -118,11 +120,11 @@
         </header>
         <label>
           Usuário
-          <div class="input-wrap"><User size={18} /><input autocomplete="username" required bind:value={username} /></div>
+          <div class="input-wrap"><UserIcon size={18} /><input autocomplete="username" required bind:value={username} /></div>
         </label>
         <label>
           Senha
-          <div class="input-wrap"><Lock size={18} /><input type="password" autocomplete="current-password" required bind:value={password} /></div>
+          <div class="input-wrap"><PassIcon size={18} /><input type="password" autocomplete="current-password" required bind:value={password} /></div>
         </label>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
         <button disabled={busy}>
