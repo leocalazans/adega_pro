@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS login_attempts (
-    id bigint PRIMARY KEY DEFAULT gen_random_uuid(),
+    id bigserial PRIMARY KEY,
     tenant_id uuid REFERENCES tenants(id) ON DELETE CASCADE,
     email text NOT NULL,
     ip text NOT NULL,
