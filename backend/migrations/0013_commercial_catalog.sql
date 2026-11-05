@@ -72,3 +72,4 @@ CREATE TABLE tenant_integration_configs (
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(tenant_id,provider)
 );
+-- migration 0013 reescrita em UTF-8 valido para sqlx-migrate
