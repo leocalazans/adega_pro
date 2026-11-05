@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { KeyRound, MonitorCheck, Wifi } from "@lucide/svelte";
   import { claimActivation } from "../lib/tauri.desktop";
+  import UserIcon from "../../src-shared/UserIcon.svelte";
+  import PassIcon from "../../src-shared/PassIcon.svelte";
   let {
     apiUrl = "",
     onActivated,
@@ -47,7 +48,7 @@
       }}
     >
       <label
-        ><span><KeyRound size={15} /> Código de ativação</span><input
+        ><span><UserIcon size={15} /> Código de ativação</span><input
           bind:this={activationCodeInput}
           required
           maxlength="64"
@@ -56,7 +57,7 @@
         /></label
       >
       <label
-        ><span><MonitorCheck size={15} /> Nome do terminal</span><input
+        ><span><PassIcon size={15} /> Nome do terminal</span><input
           required
           minlength="2"
           maxlength="120"
@@ -65,7 +66,7 @@
         /></label
       >
       {#if !apiUrl}<p class="hint">
-          <Wifi size={14} /> O servidor configurado no instalador será usado.
+          O servidor configurado no instalador será usado.
         </p>{/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       <button disabled={busy}
@@ -84,29 +85,25 @@
     display: grid;
     place-items: center;
     padding: 24px;
-    background: repeating-linear-gradient(
-      135deg,
-      #111 0 12px,
-      #171717 12px 24px
-    );
-    color: #f4f6f4;
+    background: var(--paper);
+    color: var(--ink);
   }
   .activation-card {
     width: min(470px, 100%);
     padding: 34px;
-    border: 1px solid #343b35;
+    border: 1px solid var(--line);
     border-radius: 20px;
-    background: #0a0c0a;
-    box-shadow: 0 24px 70px #0009;
+    background: var(--surface);
+    box-shadow: var(--shadow-lifted);
   }
   .mark {
-    color: #92d66d;
-    font: 900 25px/1 monospace;
+    color: var(--primary);
+    font: 900 25px/1 "Space Grotesk", monospace;
     letter-spacing: -0.12em;
   }
   .eyebrow {
     margin: 25px 0 6px;
-    color: #91a095;
+    color: var(--muted);
     font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.12em;
@@ -114,10 +111,11 @@
   }
   .activation-card h1 {
     margin: 0;
-    font-size: 30px;
+    font: 700 30px/1 "Space Grotesk", sans-serif;
+    color: var(--ink);
   }
   .intro {
-    color: #aab3ac;
+    color: var(--muted);
     font-size: 14px;
     line-height: 1.55;
   }
@@ -129,7 +127,7 @@
   .activation-card label {
     display: grid;
     gap: 7px;
-    color: #dce4de;
+    color: var(--muted);
     font-size: 12px;
     font-weight: 700;
   }
@@ -141,41 +139,43 @@
   }
   .activation-card input {
     padding: 13px;
-    border: 1px solid #3a453d;
+    border: 1px solid var(--line);
     border-radius: 10px;
-    background: #151915;
-    color: #fff;
-    font: 600 15px monospace;
+    background: var(--surface);
+    color: var(--ink);
+    font: 600 15px Inter, sans-serif;
     outline: 0;
   }
   .activation-card input:focus {
-    border-color: #92d66d;
+    border-color: var(--primary);
   }
   .activation-card button {
     padding: 14px;
     border: 0;
     border-radius: 10px;
-    background: #92d66d;
-    color: #102010;
+    background: var(--primary);
+    color: #fff;
     font-weight: 900;
+    font-family: "Space Grotesk", sans-serif;
     cursor: pointer;
+  }
+  .activation-card button:hover:not(:disabled) {
+    background: var(--primary-dark);
   }
   .activation-card button:disabled {
     opacity: 0.65;
   }
   .hint,
   .activation-card small {
-    color: #9baa9e;
+    color: var(--muted);
     font-size: 11px;
   }
   .error {
     margin: 0;
     padding: 10px;
     border-radius: 8px;
-    background: #411f22;
-    color: #ffc6c9;
+    background: var(--danger-wash);
+    color: var(--danger-ink);
     font-size: 12px;
   }
 </style>
-
-
