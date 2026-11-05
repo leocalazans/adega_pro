@@ -136,21 +136,14 @@ export async function verifyAdminPin(pin: string): Promise<void> {
   throw new Error("A autorização exige o aplicativo desktop");
 }
 
-async function localHttp<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${LOCAL_API}${path}`, init);
-  if (!response.ok)
-    throw new Error(`Serviço local indisponível (HTTP ${response.status})`);
-  return response.json() as Promise<T>;
-}
-
 export async function searchProduct(query: string): Promise<Product[]> {
   if (inTauri()) return invoke("search_product", { query });
-  return localHttp(`/api/products/search?q=${encodeURIComponent(query)}`);
+  throw new Error("Busca de produtos requer o aplicativo desktop");
 }
 
 export async function searchByEan(ean: string): Promise<Product | null> {
   if (inTauri()) return invoke("search_by_ean", { ean });
-  return localHttp(`/api/products/${encodeURIComponent(ean)}`);
+  throw new Error("Busca por código de barras requer o aplicativo desktop");
 }
 
 export async function listProducts(
@@ -158,7 +151,7 @@ export async function listProducts(
   offset = 0,
 ): Promise<Product[]> {
   if (inTauri()) return invoke("list_products", { limit, offset });
-  return localHttp(`/api/products?limit=${limit}&offset=${offset}`);
+  throw new Error("Listagem de produtos requer o aplicativo desktop");
 }
 export async function saveProduct(
   input: Omit<Product, "id" | "updated_at" | "active">,
@@ -205,16 +198,7 @@ export async function recordSale(
       terminalId,
       consumerDocument: consumerDocument || null,
     });
-  return localHttp("/api/sales", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      items,
-      payment,
-      terminal_id: terminalId,
-      consumer_document: consumerDocument || null,
-    }),
-  });
+  throw new Error("Registro de venda requer o aplicativo desktop");
 }
 export async function generatePix(
   amountBrlCents: number,
@@ -310,7 +294,7 @@ export async function cashBlindClosing(
 
 export async function syncStatus(): Promise<SyncInfo> {
   if (inTauri()) return invoke("sync_status");
-  return localHttp("/api/sync/status");
+  throw new Error("Sincronização requer o aplicativo desktop");
 }
 
 export function onBarcode(
@@ -545,7 +529,7 @@ export async function listPromotions(
   if (inTauri()) return invoke("list_promotions", { includeInactive });
   if (includeInactive)
     throw new Error("A prévia web mostra somente promoções ativas");
-  return localHttp("/api/display/promotions");
+  throw new Error("Listagem de promoções requer o aplicativo desktop");
 }
 export async function setPromotionActive(
   id: number,
@@ -680,7 +664,7 @@ export async function localDisplayLink(): Promise<LocalDisplayLink> {
 }
 export async function getDisplaySettings(): Promise<DisplaySettings> {
   if (inTauri()) return invoke("get_display_settings");
-  return localHttp("/api/display/settings");
+  throw new Error("Configurações de exibição requerem o aplicativo desktop");
 }
 export async function saveDisplaySettings(
   settings: DisplaySettings,
