@@ -252,6 +252,7 @@ export interface TenantSubscriptionPaymentRequest {
   billing_type: string;
   description?: string;
   validity_days?: number;
+  due_days?: number;
 }
 
 export interface TenantPaymentIntentOut {

@@ -1646,7 +1646,10 @@ struct TenantSubscriptionPaymentRequest {
     amount_brl_cents: i64,
     billing_type: String,
     description: Option<String>,
+    /// Período de assinatura liberado após a confirmação (dias).
     validity_days: Option<i64>,
+    /// Vencimento da cobrança no Asaas; padrão igual a validity_days.
+    due_days: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2005,7 +2008,8 @@ async fn public_signup(
                     "Assinatura CommerceCTRL - {} ({})",
                     name, request.plan
                 )),
-                validity_days: Some(3),
+                validity_days: Some(30),
+                due_days: Some(3),
             };
             match create_subscription_payment(&state, created.tenant_id, &payment_request).await {
                 Ok(value) => payment = Some(value),
@@ -2196,8 +2200,9 @@ async fn create_subscription_payment(
 
     let external_reference = format!("sub-{}-{}", tenant_id, Uuid::new_v4().simple());
     let id = Uuid::new_v4();
-    let validity_days = request.validity_days.unwrap_or(30);
-    let expires_at = chrono::Utc::now() + chrono::Duration::days(validity_days);
+    let validity_days = request.validity_days.unwrap_or(30).clamp(1, 730);
+    let due_days = request.due_days.unwrap_or(validity_days).clamp(1, 730);
+    let expires_at = chrono::Utc::now() + chrono::Duration::days(due_days);
 
     sqlx::query(
         "INSERT INTO payment_intents(id,tenant_id,unit_id,terminal_id,provider,external_reference,amount_brl_cents,status,raw,created_at) VALUES($1,$2,$3,$4,'asaas',$5,$6,'creating',$7,now())",
@@ -2208,7 +2213,7 @@ async fn create_subscription_payment(
     .bind(Uuid::nil())
     .bind(&external_reference)
     .bind(request.amount_brl_cents)
-    .bind(serde_json::json!({"validity_days": validity_days}))
+    .bind(serde_json::json!({"validity_days": validity_days, "due_days": due_days}))
     .execute(&state.db)
     .await
     .map_err(internal)?;
