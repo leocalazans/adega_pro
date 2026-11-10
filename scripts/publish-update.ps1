@@ -16,7 +16,10 @@ Invoke-RestMethod -Method Post -Uri "$env:SUPABASE_URL/storage/v1/object/$env:SU
 $publicUrl="$env:SUPABASE_URL/storage/v1/object/public/$env:SUPABASE_UPDATE_BUCKET/$object"
 $manifest=@{version=$Version;notes='Atualização CommerceCTRL';pub_date=(Get-Date).ToUniversalTime().ToString('o');platforms=@{'windows-x86_64'=@{signature=(Get-Content -LiteralPath $signaturePath -Raw).Trim();url=$publicUrl}}}|ConvertTo-Json -Depth 8
 $temp=Join-Path ([IO.Path]::GetTempPath()) "commercectrl-latest-$([guid]::NewGuid().ToString('N')).json"
-Set-Content -LiteralPath $temp -Value $manifest -Encoding utf8
-Invoke-RestMethod -Method Post -Uri "$env:SUPABASE_URL/storage/v1/object/$env:SUPABASE_UPDATE_BUCKET/latest.json" -Headers $headers -ContentType 'application/json' -InFile $temp | Out-Null
+# Sem BOM: o updater faz parse estrito de JSON e BOM quebra a verificação.
+[System.IO.File]::WriteAllText($temp, $manifest, (New-Object System.Text.UTF8Encoding($false)))
+$manifestHeaders=$headers.Clone()
+$manifestHeaders['cache-control']='no-cache, max-age=0'
+Invoke-RestMethod -Method Post -Uri "$env:SUPABASE_URL/storage/v1/object/$env:SUPABASE_UPDATE_BUCKET/latest.json" -Headers $manifestHeaders -ContentType 'application/json' -InFile $temp | Out-Null
 Remove-Item -LiteralPath $temp -Force
 Write-Output "Publicado $publicUrl"
