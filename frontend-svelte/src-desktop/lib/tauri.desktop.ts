@@ -155,7 +155,7 @@ export async function printReceipt(
   consumerDocument?: string,
   logoDataUrl?: string,
 ) {
-  const mode = await getPrinterConfig().mode;
+  const mode = (await getPrinterConfig()).mode;
   if (mode === "windows_graphic") {
     printGraphicalReceipt(saleUuid, items, totalBrlCents, storeName, paymentMethod, consumerDocument, logoDataUrl);
     return;
@@ -295,6 +295,18 @@ export async function cloudOwnerBranding(): Promise<TenantBranding> {
 }
 export async function cloudSaveOwnerBranding(displayName: string, logoDataUrl: string, primaryColor?: string | null): Promise<TenantBranding> {
   return invoke("cloud_save_owner_branding", { displayName, logoDataUrl: logoDataUrl || null, primaryColor: primaryColor || null });
+}
+/// Verifica o canal oficial e, se houver versão nova assinada, baixa, instala e
+/// reinicia o aplicativo. Sem internet ou sem assinatura válida, não faz nada.
+export async function autoUpdate(onAvailable?: (version: string) => void): Promise<boolean> {
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const update = await check();
+  if (!update) return false;
+  onAvailable?.(update.version);
+  await update.downloadAndInstall();
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  await relaunch();
+  return true;
 }
 export async function localDisplayLink(): Promise<LocalDisplayLink> {
   return invoke("local_display_link");

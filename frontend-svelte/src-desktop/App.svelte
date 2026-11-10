@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { Menu, Moon, Sun, PanelLeftClose, PanelLeftOpen, CircleUserRound, Wifi, WifiOff, LockKeyhole } from "@lucide/svelte";
   import { routes } from "./lib/navigation";
-  import { activationStatus, configureKioskAdminPin, currentSession, exitKioskAsAdmin, inTauri, kioskAdminStatus, logoutEmployee, syncStatus } from "./lib/tauri.desktop";
+  import { activationStatus, autoUpdate, cloudOwnerBranding, configureKioskAdminPin, currentSession, exitKioskAsAdmin, inTauri, kioskAdminStatus, logoutEmployee, syncStatus } from "./lib/tauri.desktop";
   import type { UserSession } from "../src-shared/types";
   import IconButton from "../src-shared/IconButton.svelte";
   import Dashboard from "./pages/Dashboard.svelte";
@@ -46,6 +46,7 @@
   let clientName = $state("Sua loja");
   let clientLogo = $state("");
   let session = $state<UserSession | null>(null);
+  let updateNotice = $state("");
 
   const navigate = (href: string) => {
     history.pushState({}, "", href);
@@ -53,7 +54,7 @@
     sidebarOpen = false;
   };
 
-  onMount(async () => {
+  onMount(() => {
     isDesktop = inTauri();
     if (isDesktop) {
       activationStatus().then((value) => {
@@ -93,6 +94,13 @@
     let unlistenKioskExit: (() => void) | undefined;
     if (isDesktop) {
       listen("kiosk-exit-requested", () => openAdminExit()).then((unlisten) => unlistenKioskExit = unlisten);
+      // Atualização automática: checa o canal assinado alguns segundos após abrir,
+      // antes de qualquer venda. Se houver versão nova, instala e reabre o PDV.
+      window.setTimeout(() => {
+        autoUpdate((version) => {
+          updateNotice = `Baixando a versão ${version}. O PDV vai reiniciar em instantes.`;
+        }).catch(() => { });
+      }, 8000);
     }
     return () => { window.removeEventListener("popstate", pop); window.removeEventListener("keydown", shortcut); window.removeEventListener("commercectrl-branding", brandingChanged); unlistenKioskExit?.(); clearInterval(timer); };
   });
@@ -144,6 +152,7 @@
   <LoginDesktop storeName={clientName} onLogin={loggedIn} />
 {:else}
   <div class="app-shell">
+    {#if updateNotice}<div class="update-banner" role="status">{updateNotice}</div>{/if}
     <aside class:open={sidebarOpen} class:collapsed={sidebarCollapsed || isPosRoute} class:pos-dock={isPosRoute} class="sidebar">
       <button class="brand" onclick={() => navigate("/")} aria-label="Ir ao dashboard">
         <span class="brand-mark system-wordmark">_,CTRL</span>
@@ -177,7 +186,7 @@
             <span class:online class="connection" class:warning={conflicts > 0} title={syncError}>{#if online}<Wifi size={15} /> Online{:else}<WifiOff size={15} /> Offline{/if}{#if pending} · {pending} pendentes{/if}{#if conflicts} · {conflicts} conflitos{/if}</span>
             <IconButton onclick={logout} title="Encerrar sessão">
               {#snippet icon()}<CircleUserRound size={24} />{/snippet}
-              {#snippet children()}<span><strong>{session.display_name}</strong><small>{session.role} · sair</small></span>{/snippet}
+              {#snippet children()}<span><strong>{session?.display_name}</strong><small>{session?.role} · sair</small></span>{/snippet}
             </IconButton>
             {#if isDesktop && session.permissions.includes("*")}
               <IconButton onclick={openAdminExit} title="Fechar aplicativo (Ctrl+Shift+Q)" aria-label="Fechar aplicativo (Ctrl+Shift+Q)">
@@ -225,7 +234,19 @@
     </form>
   </div>
 {/if}
-
-
-
-
+<style>
+  .update-banner {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 90;
+    max-width: 320px;
+    padding: 12px 14px;
+    border: 1px solid #2f6b4f;
+    background: #123326;
+    color: #dff3d3;
+    font-size: 13px;
+    line-height: 1.4;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+</style>

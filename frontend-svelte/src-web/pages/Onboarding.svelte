@@ -86,7 +86,7 @@
             <QrCode size={160} color="#0D5C3A" />
             <div class="qr-label">Escaneie o QR Code PIX para pagar</div>
             <div class="copy-qr" style="font-size:11px;word-break:break-all;margin-top:6px">{paymentResult.qr_payload}</div>
-            <button class="button copy-btn" onclick={()=>{navigator.clipboard.writeText(paymentResult.qr_payload||"");message="Código PIX copiado."}}>Copiar código PIX</button>
+            <button class="button copy-btn" onclick={()=>{const qr = paymentResult?.qr_payload ?? "";navigator.clipboard.writeText(qr);message="Código PIX copiado."}}>Copiar código PIX</button>
           </div>
         {:else if paymentResult?.checkout_url}
           <div class="qr-box">

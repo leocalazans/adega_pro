@@ -28,6 +28,17 @@
     sidebarOpen = false;
   };
 
+  function toggleSidebarCompact() {
+    sidebarCollapsed = !sidebarCollapsed;
+    window.localStorage.setItem("commercectrl.sidebar.collapsed", String(sidebarCollapsed));
+  }
+
+  function toggleTheme() {
+    darkTheme = !darkTheme;
+    window.localStorage.setItem("commercectrl.theme", darkTheme ? "dark" : "light");
+    document.documentElement.classList.toggle("dark", darkTheme);
+  }
+
   onMount(() => {
     const existing = tenantMe().catch(() => null);
     if (existing) {
