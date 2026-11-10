@@ -8,7 +8,7 @@ use axum::{
     extract::{connect_info::ConnectInfo, FromRequestParts, Path, Query, State},
     http::{header, request::Parts, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, patch, post, put},
     Json, Router,
 };
 use base64::engine::general_purpose::STANDARD;
@@ -120,8 +120,17 @@ struct PlatformTenantOut {
     online_terminals: i64,
     subscription_status: Option<String>,
     billing_mode: Option<String>,
+    plan: Option<String>,
     courtesy_until: Option<chrono::DateTime<chrono::Utc>>,
     current_period_ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    asaas_customer_id: Option<String>,
+    owner_email: Option<String>,
+    cnpj_cpf: Option<String>,
+    phone: Option<String>,
+    monthly_brl_cents: i64,
+    mrr_brl_cents: i64,
+    archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1343,7 +1352,7 @@ async fn tenant_login(
         .filter(|value| !value.is_empty())
         .map(str::to_lowercase);
     let candidates = sqlx::query_as::<_, TenantUserRecord>(
-        "SELECT u.id,u.tenant_id,u.unit_id,u.email,u.password_hash,u.role,u.display_name,u.must_change_password FROM tenant_users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=$1 AND u.active=true AND u.revoked_at IS NULL AND ($2::text IS NULL OR t.slug=$2) ORDER BY u.created_at",
+        "SELECT u.id,u.tenant_id,u.unit_id,u.email,u.password_hash,u.role,u.display_name,u.must_change_password FROM tenant_users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=$1 AND u.active=true AND u.revoked_at IS NULL AND t.archived_at IS NULL AND ($2::text IS NULL OR t.slug=$2) ORDER BY u.created_at",
     )
     .bind(&email)
     .bind(&slug)
@@ -1358,7 +1367,7 @@ async fn tenant_login(
     if candidates.len() > 1 {
         // O mesmo e-mail existe em lojas diferentes: o cliente precisa informar o slug.
         let tenants = sqlx::query_as::<_, (String, String)>(
-            "SELECT t.slug,t.name FROM tenant_users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=$1 AND u.active=true AND u.revoked_at IS NULL ORDER BY t.name",
+            "SELECT t.slug,t.name FROM tenant_users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=$1 AND u.active=true AND u.revoked_at IS NULL AND t.archived_at IS NULL ORDER BY t.name",
         )
         .bind(&email)
         .fetch_all(&state.db)
@@ -1540,16 +1549,43 @@ async fn tenant_me(
     })))
 }
 
+#[derive(Debug, Deserialize)]
+struct TenantsQuery {
+    #[serde(default)]
+    include_archived: bool,
+}
+
+const TENANT_LIST_SQL: &str = r#"
+SELECT t.id,t.name,t.slug,
+    COUNT(DISTINCT u.id)::bigint AS units,
+    COUNT(DISTINCT terminal.id)::bigint AS terminals,
+    COUNT(DISTINCT terminal.id) FILTER (WHERE terminal.active AND terminal.last_seen_at>now()-interval '15 minutes')::bigint AS online_terminals,
+    s.status AS subscription_status, s.billing_mode, s.plan,
+    s.courtesy_until, s.current_period_ends_at, s.asaas_customer_id,
+    (SELECT owner.email FROM tenant_users owner WHERE owner.tenant_id=t.id AND owner.role='owner' AND owner.active=true ORDER BY owner.created_at LIMIT 1) AS owner_email,
+    t.cnpj_cpf, t.phone,
+    COALESCE((SELECT p.monthly_brl_cents FROM platform_plan_catalog p WHERE p.code=CASE s.plan WHEN 'essencial' THEN 'starter' WHEN 'profissional' THEN 'fiscal' WHEN 'rede' THEN 'premium' ELSE s.plan END),0)::bigint AS monthly_brl_cents,
+    (CASE WHEN s.billing_mode='paid' AND s.status='active' THEN COALESCE((SELECT p.monthly_brl_cents FROM platform_plan_catalog p WHERE p.code=CASE s.plan WHEN 'essencial' THEN 'starter' WHEN 'profissional' THEN 'fiscal' WHEN 'rede' THEN 'premium' ELSE s.plan END),0) ELSE 0 END)::bigint AS mrr_brl_cents,
+    t.archived_at, t.created_at
+FROM tenants t
+LEFT JOIN units u ON u.tenant_id=t.id
+LEFT JOIN terminals terminal ON terminal.tenant_id=t.id
+LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id
+WHERE ($1 OR t.archived_at IS NULL)
+GROUP BY t.id,t.name,t.slug,s.status,s.billing_mode,s.plan,s.courtesy_until,s.current_period_ends_at,s.asaas_customer_id,t.cnpj_cpf,t.phone,t.archived_at,t.created_at
+ORDER BY t.created_at DESC
+"#;
+
 async fn platform_tenants(
     State(state): State<Arc<AppState>>,
     _auth: PlatformAuth,
+    Query(query): Query<TenantsQuery>,
 ) -> Result<Json<Vec<PlatformTenantOut>>, ApiError> {
-    let tenants = sqlx::query_as::<_, PlatformTenantOut>(
-        "SELECT t.id,t.name,t.slug,COUNT(DISTINCT u.id)::bigint AS units,COUNT(DISTINCT terminal.id)::bigint AS terminals,COUNT(DISTINCT terminal.id) FILTER (WHERE terminal.active AND terminal.last_seen_at>now()-interval '15 minutes')::bigint AS online_terminals,s.status AS subscription_status,s.billing_mode,s.courtesy_until,s.current_period_ends_at FROM tenants t LEFT JOIN units u ON u.tenant_id=t.id LEFT JOIN terminals terminal ON terminal.tenant_id=t.id LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id GROUP BY t.id,t.name,t.slug,s.status,s.billing_mode,s.courtesy_until,s.current_period_ends_at ORDER BY t.created_at DESC",
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(internal)?;
+    let tenants = sqlx::query_as::<_, PlatformTenantOut>(TENANT_LIST_SQL)
+        .bind(query.include_archived)
+        .fetch_all(&state.db)
+        .await
+        .map_err(internal)?;
     Ok(Json(tenants))
 }
 
@@ -1564,8 +1600,7 @@ async fn platform_tenant_detail(
     .bind(tenant_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(internal)?
-    .ok_or_else(|| error(StatusCode::NOT_FOUND, "unidade não encontrada"))?;
+    .map_err(internal)?;
     let detail = sqlx::query_as::<
         _,
         (
@@ -1573,12 +1608,18 @@ async fn platform_tenant_detail(
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
             Option<chrono::DateTime<chrono::Utc>>,
             Option<chrono::DateTime<chrono::Utc>>,
             Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            chrono::DateTime<chrono::Utc>,
+            Option<String>,
         ),
     >(
-        "SELECT t.name,t.slug,s.status,s.billing_mode,s.courtesy_until,s.current_period_ends_at,(SELECT u.email FROM tenant_users u WHERE u.tenant_id=t.id AND u.role='owner' ORDER BY u.created_at LIMIT 1) FROM tenants t LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id WHERE t.id=$1",
+        "SELECT t.name,t.slug,s.status,s.billing_mode,s.plan,s.courtesy_until,s.current_period_ends_at,s.asaas_customer_id,t.cnpj_cpf,t.phone,t.archived_at,t.created_at,(SELECT u.email FROM tenant_users u WHERE u.tenant_id=t.id AND u.role='owner' ORDER BY u.created_at LIMIT 1) FROM tenants t LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id WHERE t.id=$1",
     )
     .bind(tenant_id)
     .fetch_optional(&state.db)
@@ -1592,10 +1633,1547 @@ async fn platform_tenant_detail(
         "slug": detail.1,
         "subscription_status": detail.2,
         "billing_mode": detail.3,
-        "courtesy_until": detail.4,
-        "current_period_ends_at": detail.5,
-        "owner_email": detail.6,
+        "plan": detail.4,
+        "courtesy_until": detail.5,
+        "current_period_ends_at": detail.6,
+        "asaas_customer_id": detail.7,
+        "cnpj_cpf": detail.8,
+        "phone": detail.9,
+        "archived_at": detail.10,
+        "created_at": detail.11,
+        "owner_email": detail.12,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Operação do SuperAdmin: exclusão (arquivamento), plano, unidades, terminais,
+// usuários, cobranças, auditoria, métricas, leads e feature flags.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct ArchiveTenantRequest {
+    confirm_slug: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Arquiva um tenant (soft delete). Nunca apaga vendas: o histórico continua
+/// disponível para auditoria e a loja pode ser restaurada.
+async fn platform_archive_tenant(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<ArchiveTenantRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query_as::<_, (Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT slug,archived_at FROM tenants WHERE id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "tenant não encontrado"))?;
+    if row.1.is_some() {
+        return Err(error(StatusCode::CONFLICT, "tenant já está arquivado"));
+    }
+    let slug = row.0.unwrap_or_default();
+    if request.confirm_slug.trim().to_lowercase() != slug.to_lowercase() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("confirmação inválida: digite o slug \"{slug}\" para arquivar"),
+        ));
+    }
+    let reason = request
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(300).collect::<String>());
+
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    let previous_status = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT status FROM tenant_subscriptions WHERE tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(internal)?
+    .flatten();
+    sqlx::query("UPDATE tenants SET archived_at=now(),archived_by=$2,archive_reason=$3,archive_previous_status=$4 WHERE id=$1")
+        .bind(tenant_id)
+        .bind(auth.admin_id)
+        .bind(&reason)
+        .bind(&previous_status)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE tenant_subscriptions SET status='cancelled',updated_at=now() WHERE tenant_id=$1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE licenses SET status='suspended',updated_at=now() WHERE tenant_id=$1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE terminals SET active=false WHERE tenant_id=$1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE tenant_admins SET active=false WHERE tenant_id=$1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE platform_activation_codes SET revoked_at=now() WHERE tenant_id=$1 AND revoked_at IS NULL")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("DELETE FROM tenant_sessions WHERE user_id IN (SELECT id FROM tenant_users WHERE tenant_id=$1)")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.archived",
+        Some(tenant_id),
+        serde_json::json!({"reason": reason, "previous_status": previous_status}),
+    )
+    .await;
+    info!(admin=%auth.email,tenant=%tenant_id,"tenant arquivado (soft delete)");
+    Ok(Json(serde_json::json!({
+        "tenant_id": tenant_id,
+        "archived": true,
+        "archived_at": chrono::Utc::now()
+    })))
+}
+
+/// Desfaz o arquivamento. Terminais continuam desligados e precisam de novo
+/// código de ativação — mesma regra usada ao restaurar uma suspensão.
+async fn platform_unarchive_tenant(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
+        ),
+    >(
+        "SELECT t.archived_at,t.archive_previous_status,s.trial_ends_at,s.courtesy_until,s.billing_mode FROM tenants t LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id WHERE t.id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "tenant não encontrado"))?;
+    if row.0.is_none() {
+        return Err(error(StatusCode::CONFLICT, "tenant não está arquivado"));
+    }
+    let now = chrono::Utc::now();
+    let restored_status = row
+        .1
+        .clone()
+        .filter(|status| status != "cancelled")
+        .unwrap_or_else(|| {
+            if row.2.is_some_and(|trial| trial > now) {
+                "trial".into()
+            } else {
+                "active".into()
+            }
+        });
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    sqlx::query("UPDATE tenants SET archived_at=NULL,archived_by=NULL,archive_reason=NULL,archive_previous_status=NULL WHERE id=$1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE tenant_subscriptions SET status=$2,updated_at=now() WHERE tenant_id=$1")
+        .bind(tenant_id)
+        .bind(&restored_status)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE tenant_admins SET active=true WHERE tenant_id=$1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    // Assinatura de cortesia vencida não deve voltar como ativa.
+    if row.4.as_deref() == Some("courtesy") && row.3.is_some_and(|until| until <= now) {
+        sqlx::query("UPDATE tenant_subscriptions SET status='suspended',updated_at=now() WHERE tenant_id=$1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(internal)?;
+    }
+    tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.unarchived",
+        Some(tenant_id),
+        serde_json::json!({"status": restored_status}),
+    )
+    .await;
+    info!(admin=%auth.email,tenant=%tenant_id,"tenant desarquivado");
+    Ok(Json(serde_json::json!({
+        "tenant_id": tenant_id,
+        "archived": false,
+        "status": restored_status,
+        "terminals_require_reactivation": true
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct TenantUpdateRequest {
+    name: Option<String>,
+    slug: Option<String>,
+    cnpj_cpf: Option<String>,
+    phone: Option<String>,
+    owner_email: Option<String>,
+}
+
+async fn platform_update_tenant(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<TenantUpdateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let current = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT name,slug FROM tenants WHERE id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "tenant não encontrado"))?;
+    let mut changed = Vec::new();
+    let name = match request.name {
+        Some(value) => {
+            let value = value.trim().to_string();
+            if value.len() < 2 || value.len() > 120 {
+                return Err(error(StatusCode::BAD_REQUEST, "nome inválido"));
+            }
+            if value != current.0 {
+                changed.push("name");
+            }
+            Some(value)
+        }
+        None => None,
+    };
+    let slug = match request.slug {
+        Some(value) => {
+            let value = slugify(value.trim());
+            if value.is_empty() || value.len() > 80 {
+                return Err(error(StatusCode::BAD_REQUEST, "slug inválido"));
+            }
+            let taken = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM tenants WHERE slug=$1 AND id<>$2)",
+            )
+            .bind(&value)
+            .bind(tenant_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(internal)?;
+            if taken {
+                return Err(error(StatusCode::CONFLICT, "slug já usado por outra loja"));
+            }
+            changed.push("slug");
+            Some(value)
+        }
+        None => None,
+    };
+    let cnpj = request.cnpj_cpf.map(|value| {
+        let digits = value.chars().filter(char::is_ascii_digit).collect::<String>();
+        if digits.is_empty() {
+            None
+        } else {
+            Some(value.trim().chars().take(24).collect::<String>())
+        }
+    });
+    let phone = request.phone.map(|value| {
+        let trimmed = value.trim().chars().take(32).collect::<String>();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+    if let Some(Some(_)) = &cnpj {
+        changed.push("cnpj_cpf");
+    }
+    if let Some(Some(_)) = &phone {
+        changed.push("phone");
+    }
+    let owner_email = request.owner_email.map(|value| value.trim().to_lowercase());
+    if let Some(email) = &owner_email {
+        let valid = email.len() >= 5
+            && email.len() <= 200
+            && email
+                .split_once('@')
+                .is_some_and(|(user, domain)| !user.is_empty() && domain.contains('.'));
+        if !valid {
+            return Err(error(StatusCode::BAD_REQUEST, "e-mail do responsável inválido"));
+        }
+        changed.push("owner_email");
+    }
+
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    sqlx::query(
+        "UPDATE tenants SET name=COALESCE($2,name),slug=COALESCE($3,slug),cnpj_cpf=CASE WHEN $4 THEN $5 ELSE cnpj_cpf END,phone=CASE WHEN $6 THEN $7 ELSE phone END WHERE id=$1",
+    )
+    .bind(tenant_id)
+    .bind(&name)
+    .bind(&slug)
+    .bind(cnpj.is_some())
+    .bind(cnpj.clone().flatten())
+    .bind(phone.is_some())
+    .bind(phone.clone().flatten())
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?;
+    if let Some(email) = &owner_email {
+        sqlx::query("UPDATE tenant_users SET email=$2,updated_at=now() WHERE tenant_id=$1 AND role='owner'")
+            .bind(tenant_id)
+            .bind(email)
+            .execute(&mut *tx)
+            .await
+            .map_err(internal)?;
+        sqlx::query("UPDATE tenant_admins SET email=$2 WHERE tenant_id=$1 AND role='owner'")
+            .bind(tenant_id)
+            .bind(email)
+            .execute(&mut *tx)
+            .await
+            .map_err(internal)?;
+    }
+    tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.updated",
+        Some(tenant_id),
+        serde_json::json!({"fields": changed}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({"tenant_id": tenant_id, "updated": changed})))
+}
+
+#[derive(Debug, Deserialize)]
+struct PlanChangeRequest {
+    plan: String,
+    note: Option<String>,
+}
+
+async fn platform_change_plan(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<PlanChangeRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let plan = request.plan.trim().to_lowercase();
+    let valid = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM platform_plan_catalog WHERE code=$1 AND active=true)",
+    )
+    .bind(&plan)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    if !valid {
+        return Err(error(StatusCode::BAD_REQUEST, "plano inválido ou inativo"));
+    }
+    let current = sqlx::query_scalar::<_, String>(
+        "SELECT plan FROM tenant_subscriptions WHERE tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "assinatura não encontrada"))?;
+    let note = request
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(300).collect::<String>());
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    sqlx::query("UPDATE tenant_subscriptions SET plan=$2,updated_at=now() WHERE tenant_id=$1")
+        .bind(tenant_id)
+        .bind(&plan)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("INSERT INTO tenant_plan_history(tenant_id,from_plan,to_plan,changed_by,note) VALUES($1,$2,$3,$4,$5)")
+        .bind(tenant_id)
+        .bind(&current)
+        .bind(&plan)
+        .bind(auth.admin_id)
+        .bind(&note)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.plan_changed",
+        Some(tenant_id),
+        serde_json::json!({"from": current, "to": plan, "note": note}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({
+        "tenant_id": tenant_id,
+        "plan": plan,
+        "previous_plan": current
+    })))
+}
+
+async fn platform_plan_history(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = sqlx::query_as::<_, (i64, Option<String>, String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT h.id,h.from_plan,h.to_plan,a.email,h.note,h.created_at FROM tenant_plan_history h LEFT JOIN platform_admins a ON a.id=h.changed_by WHERE h.tenant_id=$1 ORDER BY h.created_at DESC LIMIT 50",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(serde_json::json!(rows
+        .into_iter()
+        .map(|row| serde_json::json!({
+            "id": row.0,
+            "from_plan": row.1,
+            "to_plan": row.2,
+            "changed_by": row.3,
+            "note": row.4,
+            "created_at": row.5,
+        }))
+        .collect::<Vec<_>>())))
+}
+
+#[derive(Debug, Deserialize)]
+struct OwnerPasswordRequest {
+    #[serde(default)]
+    new_password: Option<String>,
+}
+
+/// Redefine a senha do owner. Sem `new_password`, gera uma temporária e exige
+/// troca no próximo login.
+async fn platform_reset_owner_password(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<OwnerPasswordRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM tenant_users WHERE tenant_id=$1 AND role='owner' ORDER BY created_at LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "owner do tenant não encontrado"))?;
+    let provided = request
+        .new_password
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(password) = provided {
+        if password.len() < 8 || password.len() > 128 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "a senha deve ter entre 8 e 128 caracteres",
+            ));
+        }
+    }
+    let password = provided
+        .map(str::to_string)
+        .unwrap_or_else(temporary_password);
+    let hash = password_hash(&password)?;
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    sqlx::query("UPDATE tenant_users SET password_hash=$2,must_change_password=$3,active=true,revoked_at=NULL,updated_at=now() WHERE id=$1")
+        .bind(owner)
+        .bind(&hash)
+        .bind(provided.is_none())
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("DELETE FROM tenant_sessions WHERE user_id=$1")
+        .bind(owner)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.owner_password_reset",
+        Some(tenant_id),
+        serde_json::json!({"generated": provided.is_none()}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({
+        "tenant_id": tenant_id,
+        "password": password,
+        "generated": provided.is_none(),
+        "must_change_password": provided.is_none()
+    })))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct PlatformUnitOut {
+    id: Uuid,
+    name: String,
+    code: String,
+    active: bool,
+    terminals: i64,
+}
+
+async fn platform_tenant_units(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Vec<PlatformUnitOut>>, ApiError> {
+    let rows = sqlx::query_as::<_, PlatformUnitOut>(
+        "SELECT u.id,u.name,u.code,u.active,COUNT(t.id)::bigint AS terminals FROM units u LEFT JOIN terminals t ON t.unit_id=u.id AND t.tenant_id=u.tenant_id WHERE u.tenant_id=$1 GROUP BY u.id,u.name,u.code,u.active ORDER BY u.created_at",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+struct UnitCreateRequest {
+    name: String,
+    #[serde(default)]
+    code: Option<String>,
+}
+
+async fn platform_create_unit(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<UnitCreateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let name = request.name.trim();
+    if name.len() < 2 || name.len() > 120 {
+        return Err(error(StatusCode::BAD_REQUEST, "nome da unidade inválido"));
+    }
+    let code = request
+        .code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| slugify(value).to_uppercase())
+        .unwrap_or_else(|| format!("UNIDADE{}", Uuid::new_v4().simple().to_string()[..4].to_uppercase()));
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1 AND archived_at IS NULL)",
+    )
+    .bind(tenant_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    if !exists {
+        return Err(error(StatusCode::NOT_FOUND, "tenant não encontrado ou arquivado"));
+    }
+    let id = Uuid::new_v4();
+    let inserted = sqlx::query(
+        "INSERT INTO units(id,tenant_id,name,code) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .bind(name)
+    .bind(&code)
+    .execute(&state.db)
+    .await
+    .map_err(internal)?
+    .rows_affected();
+    if inserted == 0 {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "já existe uma unidade com esse código nesta loja",
+        ));
+    }
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "unit.created",
+        Some(tenant_id),
+        serde_json::json!({"unit_id": id, "name": name, "code": code}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "name": name,
+        "code": code,
+        "active": true,
+        "terminals": 0
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct UnitUpdateRequest {
+    name: Option<String>,
+    active: Option<bool>,
+}
+
+async fn platform_update_unit(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path((tenant_id, unit_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<UnitUpdateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(name) = &request.name {
+        let name = name.trim();
+        if name.len() < 2 || name.len() > 120 {
+            return Err(error(StatusCode::BAD_REQUEST, "nome da unidade inválido"));
+        }
+    }
+    let changed = sqlx::query(
+        "UPDATE units SET name=COALESCE($3,name),active=COALESCE($4,active) WHERE tenant_id=$1 AND id=$2",
+    )
+    .bind(tenant_id)
+    .bind(unit_id)
+    .bind(request.name.as_deref().map(str::trim))
+    .bind(request.active)
+    .execute(&state.db)
+    .await
+    .map_err(internal)?
+    .rows_affected();
+    if changed == 0 {
+        return Err(error(StatusCode::NOT_FOUND, "unidade não encontrada"));
+    }
+    if request.active == Some(false) {
+        sqlx::query("UPDATE terminals SET active=false WHERE tenant_id=$1 AND unit_id=$2")
+            .bind(tenant_id)
+            .bind(unit_id)
+            .execute(&state.db)
+            .await
+            .map_err(internal)?;
+    }
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "unit.updated",
+        Some(tenant_id),
+        serde_json::json!({"unit_id": unit_id, "name": request.name, "active": request.active}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({"unit_id": unit_id, "updated": true})))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct PlatformTerminalOut {
+    id: Uuid,
+    unit_id: Uuid,
+    unit_name: String,
+    name: String,
+    active: bool,
+    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn platform_tenant_terminals(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Vec<PlatformTerminalOut>>, ApiError> {
+    let rows = sqlx::query_as::<_, PlatformTerminalOut>(
+        "SELECT t.id,t.unit_id,u.name AS unit_name,t.name,t.active,t.last_seen_at,t.created_at FROM terminals t JOIN units u ON u.id=t.unit_id AND u.tenant_id=t.tenant_id WHERE t.tenant_id=$1 ORDER BY t.created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+struct TerminalUpdateRequest {
+    name: Option<String>,
+    active: Option<bool>,
+}
+
+async fn platform_update_terminal(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path((tenant_id, terminal_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<TerminalUpdateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(name) = &request.name {
+        let name = name.trim();
+        if name.len() < 2 || name.len() > 120 {
+            return Err(error(StatusCode::BAD_REQUEST, "nome do terminal inválido"));
+        }
+    }
+    let changed = sqlx::query(
+        "UPDATE terminals SET name=COALESCE($3,name),active=COALESCE($4,active) WHERE tenant_id=$1 AND id=$2",
+    )
+    .bind(tenant_id)
+    .bind(terminal_id)
+    .bind(request.name.as_deref().map(str::trim))
+    .bind(request.active)
+    .execute(&state.db)
+    .await
+    .map_err(internal)?
+    .rows_affected();
+    if changed == 0 {
+        return Err(error(StatusCode::NOT_FOUND, "terminal não encontrado"));
+    }
+    if request.active == Some(false) {
+        sqlx::query("UPDATE licenses SET status='suspended',updated_at=now() WHERE tenant_id=$1 AND unit_id=(SELECT unit_id FROM terminals WHERE id=$2)")
+            .bind(tenant_id)
+            .bind(terminal_id)
+            .execute(&state.db)
+            .await
+            .map_err(internal)?;
+    }
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "terminal.updated",
+        Some(tenant_id),
+        serde_json::json!({"terminal_id": terminal_id, "name": request.name, "active": request.active}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({"terminal_id": terminal_id, "updated": true})))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct PlatformUserOut {
+    id: Uuid,
+    email: String,
+    role: String,
+    active: bool,
+    unit_id: Option<Uuid>,
+    display_name: Option<String>,
+    must_change_password: bool,
+    last_login_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn platform_tenant_users(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Vec<PlatformUserOut>>, ApiError> {
+    let rows = sqlx::query_as::<_, PlatformUserOut>(
+        "SELECT id,email,role,active,unit_id,display_name,must_change_password,last_login_at,created_at FROM tenant_users WHERE tenant_id=$1 ORDER BY (role='owner') DESC,created_at",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+struct PlatformUserUpdateRequest {
+    role: Option<String>,
+    active: Option<bool>,
+    display_name: Option<String>,
+}
+
+async fn platform_update_user(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path((tenant_id, user_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<PlatformUserUpdateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(role) = &request.role {
+        if !matches!(
+            role.as_str(),
+            "owner" | "manager" | "cashier" | "stock" | "finance" | "viewer"
+        ) {
+            return Err(error(StatusCode::BAD_REQUEST, "papel inválido"));
+        }
+    }
+    if request.active == Some(false) {
+        let is_owner = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM tenant_users WHERE tenant_id=$1 AND id=$2 AND role='owner')",
+        )
+        .bind(tenant_id)
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal)?;
+        if is_owner {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "o owner não pode ser desativado; redefina a senha ou arquive a loja",
+            ));
+        }
+    }
+    let changed = sqlx::query(
+        "UPDATE tenant_users SET role=COALESCE($3,role),active=COALESCE($4,active),display_name=COALESCE($5,display_name),updated_at=now() WHERE tenant_id=$1 AND id=$2",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .bind(request.role.as_deref())
+    .bind(request.active)
+    .bind(request.display_name.as_deref().map(str::trim))
+    .execute(&state.db)
+    .await
+    .map_err(internal)?
+    .rows_affected();
+    if changed == 0 {
+        return Err(error(StatusCode::NOT_FOUND, "usuário não encontrado"));
+    }
+    if request.active == Some(false) {
+        sqlx::query("DELETE FROM tenant_sessions WHERE user_id=$1")
+            .bind(user_id)
+            .execute(&state.db)
+            .await
+            .map_err(internal)?;
+    }
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant_user.updated",
+        Some(tenant_id),
+        serde_json::json!({"user_id": user_id, "role": request.role, "active": request.active}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({"user_id": user_id, "updated": true})))
+}
+
+async fn platform_reset_user_password(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path((tenant_id, user_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>, ApiError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM tenant_users WHERE tenant_id=$1 AND id=$2)",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    if !exists {
+        return Err(error(StatusCode::NOT_FOUND, "usuário não encontrado"));
+    }
+    let password = temporary_password();
+    let hash = password_hash(&password)?;
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    sqlx::query("UPDATE tenant_users SET password_hash=$3,must_change_password=true,active=true,revoked_at=NULL,updated_at=now() WHERE tenant_id=$1 AND id=$2")
+        .bind(tenant_id)
+        .bind(user_id)
+        .bind(hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("DELETE FROM tenant_sessions WHERE user_id=$1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant_user.password_reset",
+        Some(tenant_id),
+        serde_json::json!({"user_id": user_id}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({
+        "user_id": user_id,
+        "password": password,
+        "must_change_password": true
+    })))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct PlatformPaymentOut {
+    id: Uuid,
+    amount_brl_cents: i64,
+    status: String,
+    provider_id: Option<String>,
+    external_reference: String,
+    asaas_status: Option<String>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn platform_tenant_payments(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Vec<PlatformPaymentOut>>, ApiError> {
+    let rows = sqlx::query_as::<_, PlatformPaymentOut>(
+        "SELECT id,amount_brl_cents,status,provider_id,external_reference,(raw->>'asaas_status') AS asaas_status,expires_at,created_at FROM payment_intents WHERE tenant_id=$1 AND provider='asaas' ORDER BY created_at DESC LIMIT 100",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct BillingQueueRow {
+    tenant_id: Uuid,
+    name: String,
+    slug: Option<String>,
+    plan: Option<String>,
+    status: Option<String>,
+    billing_mode: Option<String>,
+    current_period_ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    courtesy_until: Option<chrono::DateTime<chrono::Utc>>,
+    asaas_customer_id: Option<String>,
+    monthly_brl_cents: i64,
+    days_left: Option<i32>,
+    pending_amount_cents: Option<i64>,
+    pending_payment_id: Option<Uuid>,
+}
+
+async fn platform_billing_queue(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<Json<Vec<BillingQueueRow>>, ApiError> {
+    let rows = sqlx::query_as::<_, BillingQueueRow>(
+        r#"
+        SELECT t.id AS tenant_id,t.name,t.slug,s.plan,s.status,s.billing_mode,
+            s.current_period_ends_at,s.courtesy_until,s.asaas_customer_id,
+            COALESCE((SELECT p.monthly_brl_cents FROM platform_plan_catalog p WHERE p.code=CASE s.plan WHEN 'essencial' THEN 'starter' WHEN 'profissional' THEN 'fiscal' WHEN 'rede' THEN 'premium' ELSE s.plan END),0)::bigint AS monthly_brl_cents,
+            (CASE WHEN COALESCE(s.courtesy_until,s.current_period_ends_at) IS NULL THEN NULL ELSE (COALESCE(s.courtesy_until,s.current_period_ends_at)::date - now()::date) END)::int AS days_left,
+            (SELECT pi.amount_brl_cents FROM payment_intents pi WHERE pi.tenant_id=t.id AND pi.provider='asaas' AND pi.status IN ('creating','pending') ORDER BY pi.created_at DESC LIMIT 1) AS pending_amount_cents,
+            (SELECT pi.id FROM payment_intents pi WHERE pi.tenant_id=t.id AND pi.provider='asaas' AND pi.status IN ('creating','pending') ORDER BY pi.created_at DESC LIMIT 1) AS pending_payment_id
+        FROM tenants t JOIN tenant_subscriptions s ON s.tenant_id=t.id
+        WHERE t.archived_at IS NULL AND (
+            s.status IN ('past_due','suspended')
+            OR s.status='trial'
+            OR (s.current_period_ends_at IS NOT NULL AND s.current_period_ends_at <= now()+interval '10 days')
+            OR (s.billing_mode='courtesy' AND s.courtesy_until IS NOT NULL AND s.courtesy_until <= now()+interval '30 days')
+        )
+        ORDER BY COALESCE(s.courtesy_until,s.current_period_ends_at) NULLS LAST
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+struct AuditQuery {
+    tenant_id: Option<Uuid>,
+    action: Option<String>,
+    #[serde(default = "default_audit_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+}
+
+fn default_audit_limit() -> i64 {
+    100
+}
+
+async fn platform_audit_list(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let limit = query.limit.clamp(1, 500);
+    let offset = query.offset.max(0);
+    let action = query
+        .action
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{value}%"));
+    let rows = sqlx::query_as::<_, (i64, String, Option<String>, Option<Uuid>, Option<String>, String, chrono::DateTime<chrono::Utc>)>(
+        r#"SELECT e.id,e.action,a.email,e.tenant_id,t.name,e.metadata::text,e.created_at
+           FROM platform_audit_events e
+           LEFT JOIN platform_admins a ON a.id=e.admin_id
+           LEFT JOIN tenants t ON t.id=e.tenant_id
+           WHERE ($1::uuid IS NULL OR e.tenant_id=$1)
+             AND ($2::text IS NULL OR e.action LIKE $2)
+           ORDER BY e.created_at DESC LIMIT $3 OFFSET $4"#,
+    )
+    .bind(query.tenant_id)
+    .bind(&action)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    let total = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::bigint FROM platform_audit_events e WHERE ($1::uuid IS NULL OR e.tenant_id=$1) AND ($2::text IS NULL OR e.action LIKE $2)",
+    )
+    .bind(query.tenant_id)
+    .bind(&action)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(serde_json::json!({
+        "total": total,
+        "items": rows.into_iter().map(|row| serde_json::json!({
+            "id": row.0,
+            "action": row.1,
+            "admin_email": row.2,
+            "tenant_id": row.3,
+            "tenant_name": row.4,
+            "metadata": serde_json::from_str::<Value>(&row.5).unwrap_or(Value::Null),
+            "created_at": row.6,
+        })).collect::<Vec<_>>()
+    })))
+}
+
+async fn platform_metrics(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<Json<Value>, ApiError> {
+    let counts = sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+        ),
+    >(
+        r#"SELECT
+            COUNT(*) FILTER (WHERE t.archived_at IS NULL)::bigint,
+            COUNT(*) FILTER (WHERE t.archived_at IS NULL AND s.status IN ('trial','active'))::bigint,
+            COUNT(*) FILTER (WHERE t.archived_at IS NULL AND s.status='trial')::bigint,
+            COUNT(*) FILTER (WHERE t.archived_at IS NULL AND s.status='past_due')::bigint,
+            COUNT(*) FILTER (WHERE t.archived_at IS NULL AND s.status='suspended')::bigint,
+            COUNT(*) FILTER (WHERE t.archived_at IS NULL AND s.billing_mode='courtesy')::bigint,
+            COUNT(*) FILTER (WHERE t.archived_at IS NOT NULL)::bigint,
+            COUNT(*) FILTER (WHERE t.created_at > now()-interval '30 days')::bigint,
+            COUNT(*) FILTER (WHERE t.archived_at > now()-interval '30 days')::bigint
+        FROM tenants t LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id"#,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let plan_price = "COALESCE((SELECT p.monthly_brl_cents FROM platform_plan_catalog p WHERE p.code=CASE s.plan WHEN 'essencial' THEN 'starter' WHEN 'profissional' THEN 'fiscal' WHEN 'rede' THEN 'premium' ELSE s.plan END),0)";
+    let mrr = sqlx::query_as::<_, (i64, i64)>(&format!(
+        "SELECT COALESCE(SUM(CASE WHEN s.billing_mode='paid' AND s.status='active' THEN {plan_price} ELSE 0 END),0)::bigint, COALESCE(SUM(CASE WHEN s.status IN ('past_due','suspended') THEN {plan_price} ELSE 0 END),0)::bigint FROM tenant_subscriptions s JOIN tenants t ON t.id=s.tenant_id WHERE t.archived_at IS NULL"
+    ))
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let terminals = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COUNT(*)::bigint, COUNT(*) FILTER (WHERE t.active AND t.last_seen_at>now()-interval '15 minutes')::bigint FROM terminals t JOIN tenants tn ON tn.id=t.tenant_id WHERE tn.archived_at IS NULL",
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let gmv = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(total_brl_cents),0)::bigint FROM sales WHERE received_at>now()-interval '30 days'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let received = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COUNT(*)::bigint, COALESCE(SUM(amount_brl_cents),0)::bigint FROM payment_intents WHERE provider='asaas' AND status IN ('received','confirmed') AND updated_at>now()-interval '30 days'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    Ok(Json(serde_json::json!({
+        "tenants": counts.0,
+        "active_subscriptions": counts.1,
+        "trials": counts.2,
+        "past_due": counts.3,
+        "suspended": counts.4,
+        "courtesy": counts.5,
+        "archived": counts.6,
+        "new_30d": counts.7,
+        "archived_30d": counts.8,
+        "mrr_cents": mrr.0,
+        "arr_cents": mrr.0 * 12,
+        "mrr_at_risk_cents": mrr.1,
+        "terminals": terminals.0,
+        "online_terminals": terminals.1,
+        "gmv_30d_cents": gmv,
+        "payments_received_30d": received.0,
+        "revenue_received_30d_cents": received.1,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct AnalyticsQuery {
+    #[serde(default = "default_analytics_months")]
+    months: i64,
+}
+
+fn default_analytics_months() -> i64 {
+    6
+}
+
+async fn platform_analytics(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Query(query): Query<AnalyticsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let months = query.months.clamp(3, 24);
+    let series = |subject: &'static str| {
+        let sql = match subject {
+            "tenants" => {
+                "SELECT to_char(m,'YYYY-MM') AS label,(SELECT COUNT(*) FROM tenants t WHERE date_trunc('month',t.created_at)=m AND t.archived_at IS NULL)::bigint AS value FROM generate_series(date_trunc('month',now())-(($1::int)-1)*interval '1 month',date_trunc('month',now()),interval '1 month') AS m"
+            }
+            "revenue" => {
+                "SELECT to_char(m,'YYYY-MM') AS label,COALESCE((SELECT SUM(pi.amount_brl_cents) FROM payment_intents pi WHERE date_trunc('month',pi.updated_at)=m AND pi.provider='asaas' AND pi.status IN ('received','confirmed')),0)::bigint AS value FROM generate_series(date_trunc('month',now())-(($1::int)-1)*interval '1 month',date_trunc('month',now()),interval '1 month') AS m"
+            }
+            _ => {
+                "SELECT to_char(m,'YYYY-MM') AS label,COALESCE((SELECT SUM(s.total_brl_cents) FROM sales s WHERE date_trunc('month',s.received_at)=m),0)::bigint AS value FROM generate_series(date_trunc('month',now())-(($1::int)-1)*interval '1 month',date_trunc('month',now()),interval '1 month') AS m"
+            }
+        };
+        sql
+    };
+    let new_tenants = sqlx::query_as::<_, (String, i64)>(series("tenants"))
+        .bind(months)
+        .fetch_all(&state.db)
+        .await
+        .map_err(internal)?;
+    let revenue = sqlx::query_as::<_, (String, i64)>(series("revenue"))
+        .bind(months)
+        .fetch_all(&state.db)
+        .await
+        .map_err(internal)?;
+    let gmv = sqlx::query_as::<_, (String, i64)>(series("gmv"))
+        .bind(months)
+        .fetch_all(&state.db)
+        .await
+        .map_err(internal)?;
+    let plans = sqlx::query_as::<_, (String, i64, i64)>(
+        r#"SELECT s.plan,COUNT(*)::bigint,
+           COALESCE(SUM(CASE WHEN s.status='active' AND s.billing_mode='paid' THEN COALESCE((SELECT p.monthly_brl_cents FROM platform_plan_catalog p WHERE p.code=CASE s.plan WHEN 'essencial' THEN 'starter' WHEN 'profissional' THEN 'fiscal' WHEN 'rede' THEN 'premium' ELSE s.plan END),0) ELSE 0 END),0)::bigint
+           FROM tenant_subscriptions s JOIN tenants t ON t.id=s.tenant_id
+           WHERE t.archived_at IS NULL GROUP BY s.plan ORDER BY COUNT(*) DESC"#,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    let statuses = sqlx::query_as::<_, (String, i64)>(
+        "SELECT COALESCE(s.status,'sem_assinatura'),COUNT(*)::bigint FROM tenants t LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id WHERE t.archived_at IS NULL GROUP BY 1 ORDER BY 2 DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(serde_json::json!({
+        "new_tenants": new_tenants.into_iter().map(|row| serde_json::json!({"label": row.0, "value": row.1})).collect::<Vec<_>>(),
+        "revenue": revenue.into_iter().map(|row| serde_json::json!({"label": row.0, "value": row.1})).collect::<Vec<_>>(),
+        "gmv": gmv.into_iter().map(|row| serde_json::json!({"label": row.0, "value": row.1})).collect::<Vec<_>>(),
+        "plans": plans.into_iter().map(|row| serde_json::json!({"plan": row.0, "count": row.1, "mrr_cents": row.2})).collect::<Vec<_>>(),
+        "statuses": statuses.into_iter().map(|row| serde_json::json!({"status": row.0, "count": row.1})).collect::<Vec<_>>(),
+    })))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct PlatformLeadOut {
+    id: Uuid,
+    store_name: String,
+    contact_name: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
+    city: Option<String>,
+    plan_code: Option<String>,
+    modality: String,
+    details: Option<String>,
+    status: String,
+    notes: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn platform_leads(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<Json<Vec<PlatformLeadOut>>, ApiError> {
+    let rows = sqlx::query_as::<_, PlatformLeadOut>(
+        "SELECT id,store_name,contact_name,email,phone,city,plan_code,modality,details,status,notes,created_at FROM commercial_leads ORDER BY created_at DESC LIMIT 500",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+struct LeadUpdateRequest {
+    status: Option<String>,
+    notes: Option<String>,
+}
+
+async fn platform_update_lead(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(lead_id): Path<Uuid>,
+    Json(request): Json<LeadUpdateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(status) = &request.status {
+        if !matches!(
+            status.as_str(),
+            "new" | "contacted" | "qualified" | "won" | "lost"
+        ) {
+            return Err(error(StatusCode::BAD_REQUEST, "status de lead inválido"));
+        }
+    }
+    let changed = sqlx::query(
+        "UPDATE commercial_leads SET status=COALESCE($2,status),notes=COALESCE($3,notes) WHERE id=$1",
+    )
+    .bind(lead_id)
+    .bind(request.status.as_deref())
+    .bind(request.notes.as_deref().map(str::trim))
+    .execute(&state.db)
+    .await
+    .map_err(internal)?
+    .rows_affected();
+    if changed == 0 {
+        return Err(error(StatusCode::NOT_FOUND, "lead não encontrado"));
+    }
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "commercial_lead.updated",
+        None,
+        serde_json::json!({"lead_id": lead_id, "status": request.status}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({"lead_id": lead_id, "updated": true})))
+}
+
+async fn platform_flags(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let rows = sqlx::query_as::<_, (String, String, String, bool, bool)>(
+        "SELECT key,name,description,requires_homologation,active FROM platform_feature_flags ORDER BY key",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "key": row.0,
+                    "name": row.1,
+                    "description": row.2,
+                    "requires_homologation": row.3,
+                    "active": row.4,
+                })
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct FlagUpdateRequest {
+    active: bool,
+}
+
+async fn platform_update_flag(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(key): Path<String>,
+    Json(request): Json<FlagUpdateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let changed = sqlx::query("UPDATE platform_feature_flags SET active=$2 WHERE key=$1")
+        .bind(&key)
+        .bind(request.active)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?
+        .rows_affected();
+    if changed == 0 {
+        return Err(error(StatusCode::NOT_FOUND, "feature flag não encontrada"));
+    }
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "feature_flag.updated",
+        None,
+        serde_json::json!({"key": key, "active": request.active}),
+    )
+    .await;
+    Ok(Json(serde_json::json!({"key": key, "active": request.active})))
+}
+
+async fn platform_tenant_flags(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let rows = sqlx::query_as::<_, (String, String, String, bool, bool, bool)>(
+        "SELECT f.key,f.name,f.description,f.requires_homologation,f.active,COALESCE(tf.enabled,false) FROM platform_feature_flags f LEFT JOIN tenant_feature_flags tf ON tf.key=f.key AND tf.tenant_id=$1 ORDER BY f.key",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "key": row.0,
+                    "name": row.1,
+                    "description": row.2,
+                    "requires_homologation": row.3,
+                    "active": row.4,
+                    "enabled": row.5,
+                })
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct TenantFlagUpdateRequest {
+    enabled: bool,
+}
+
+async fn platform_set_tenant_flag(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path((tenant_id, key)): Path<(Uuid, String)>,
+    Json(request): Json<TenantFlagUpdateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let flag_active = sqlx::query_scalar::<_, bool>(
+        "SELECT active FROM platform_feature_flags WHERE key=$1",
+    )
+    .bind(&key)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?;
+    let Some(flag_active) = flag_active else {
+        return Err(error(StatusCode::NOT_FOUND, "feature flag não encontrada"));
+    };
+    if request.enabled && !flag_active {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "feature flag desativada na plataforma",
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO tenant_feature_flags(tenant_id,key,enabled,updated_at) VALUES($1,$2,$3,now()) ON CONFLICT(tenant_id,key) DO UPDATE SET enabled=excluded.enabled,updated_at=now()",
+    )
+    .bind(tenant_id)
+    .bind(&key)
+    .bind(request.enabled)
+    .execute(&state.db)
+    .await
+    .map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant_feature_flag.updated",
+        Some(tenant_id),
+        serde_json::json!({"key": key, "enabled": request.enabled}),
+    )
+    .await;
+    Ok(Json(
+        serde_json::json!({"tenant_id": tenant_id, "key": key, "enabled": request.enabled}),
+    ))
+}
+
+/// Abre uma sessão do painel da loja para suporte. Fica registrado na auditoria
+/// e expira em 2 horas.
+async fn platform_impersonate_tenant(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
+    let user = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
+        "SELECT u.id,u.email,u.display_name FROM tenant_users u JOIN tenants t ON t.id=u.tenant_id WHERE u.tenant_id=$1 AND u.role='owner' AND u.active=true AND u.revoked_at IS NULL AND t.archived_at IS NULL ORDER BY u.created_at LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| {
+        error(
+            StatusCode::NOT_FOUND,
+            "loja arquivada ou sem owner ativo para impersonar",
+        )
+    })?;
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    sqlx::query("INSERT INTO tenant_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '2 hours')")
+        .bind(hash_key(&token))
+        .bind(user.0)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "tenant.impersonated",
+        Some(tenant_id),
+        serde_json::json!({"user_email": user.1}),
+    )
+    .await;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::SET_COOKIE, tenant_session_cookie(&token)?);
+    Ok((
+        headers,
+        Json(serde_json::json!({
+            "tenant_id": tenant_id,
+            "email": user.1,
+            "display_name": user.2,
+            "expires_in_seconds": 7200
+        })),
+    ))
+}
+
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn csv_response(filename: &str, header: &str, rows: Vec<String>) -> impl IntoResponse {
+    let body = format!("{header}\n{}\n", rows.join("\n"));
+    (
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+}
+
+async fn platform_export_tenants(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<impl IntoResponse, ApiError> {
+    let rows = sqlx::query_as::<_, PlatformTenantOut>(TENANT_LIST_SQL)
+        .bind(true)
+        .fetch_all(&state.db)
+        .await
+        .map_err(internal)?;
+    let lines = rows
+        .into_iter()
+        .map(|row| {
+            [
+                row.name,
+                row.slug.unwrap_or_default(),
+                row.owner_email.unwrap_or_default(),
+                row.plan.unwrap_or_default(),
+                row.subscription_status.unwrap_or_default(),
+                row.billing_mode.unwrap_or_default(),
+                row.asaas_customer_id.unwrap_or_default(),
+                row.units.to_string(),
+                row.terminals.to_string(),
+                row.online_terminals.to_string(),
+                row.mrr_brl_cents.to_string(),
+                row.archived_at
+                    .map(|value| value.to_rfc3339())
+                    .unwrap_or_default(),
+                row.created_at.to_rfc3339(),
+            ]
+            .iter()
+            .map(|value| csv_field(value))
+            .collect::<Vec<_>>()
+            .join(",")
+        })
+        .collect();
+    Ok(csv_response(
+        "commercectrl-tenants.csv",
+        "nome,slug,owner_email,plano,status,billing_mode,asaas_customer_id,unidades,terminais,online,mrr_cents,arquivado_em,criado_em",
+        lines,
+    ))
+}
+
+async fn platform_export_payments(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<impl IntoResponse, ApiError> {
+    let rows = sqlx::query_as::<_, (String, Uuid, i64, String, Option<String>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT t.name,pi.id,pi.amount_brl_cents,pi.status,pi.provider_id,pi.created_at FROM payment_intents pi JOIN tenants t ON t.id=pi.tenant_id WHERE pi.provider='asaas' ORDER BY pi.created_at DESC LIMIT 5000",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    let lines = rows
+        .into_iter()
+        .map(|row| {
+            [
+                row.0,
+                row.1.to_string(),
+                row.2.to_string(),
+                row.3,
+                row.4.unwrap_or_default(),
+                row.5.to_rfc3339(),
+            ]
+            .iter()
+            .map(|value| csv_field(value))
+            .collect::<Vec<_>>()
+            .join(",")
+        })
+        .collect();
+    Ok(csv_response(
+        "commercectrl-cobrancas.csv",
+        "tenant,payment_id,valor_cents,status,asaas_id,criado_em",
+        lines,
+    ))
+}
+
+async fn platform_export_audit(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+) -> Result<impl IntoResponse, ApiError> {
+    let rows = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>, String, chrono::DateTime<chrono::Utc>)>(
+        "SELECT e.id,e.action,a.email,t.name,e.metadata::text,e.created_at FROM platform_audit_events e LEFT JOIN platform_admins a ON a.id=e.admin_id LEFT JOIN tenants t ON t.id=e.tenant_id ORDER BY e.created_at DESC LIMIT 5000",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    let lines = rows
+        .into_iter()
+        .map(|row| {
+            [
+                row.0.to_string(),
+                row.1,
+                row.2.unwrap_or_default(),
+                row.3.unwrap_or_default(),
+                row.4,
+                row.5.to_rfc3339(),
+            ]
+            .iter()
+            .map(|value| csv_field(value))
+            .collect::<Vec<_>>()
+            .join(",")
+        })
+        .collect();
+    Ok(csv_response(
+        "commercectrl-auditoria.csv",
+        "id,acao,admin,tenant,metadata,criado_em",
+        lines,
+    ))
 }
 
 async fn commercial_lead(
@@ -1829,10 +3407,12 @@ async fn provision_tenant(
     };
 
     let mut tx = state.db.begin().await.map_err(internal)?;
-    sqlx::query("INSERT INTO tenants(id,name,slug) VALUES($1,$2,$3)")
+    sqlx::query("INSERT INTO tenants(id,name,slug,cnpj_cpf,phone) VALUES($1,$2,$3,$4,$5)")
         .bind(tenant_id)
         .bind(name)
         .bind(&slug)
+        .bind(request.cnpj_cpf.as_deref().map(str::trim).filter(|value| !value.is_empty()))
+        .bind(request.phone.as_deref().map(str::trim).filter(|value| !value.is_empty()))
         .execute(&mut *tx)
         .await
         .map_err(internal)?;
@@ -2360,6 +3940,7 @@ async fn create_subscription_payment(
 
 async fn platform_payment_status(
     State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
     Path(tenant_id): Path<Uuid>,
 ) -> Result<Json<TenantPaymentIntentOut>, ApiError> {
     let result = sqlx::query_as::<_, PaymentIntentOut>(
@@ -2460,7 +4041,7 @@ async fn platform_restore_tenant(
     auth: PlatformAuth,
     Path(tenant_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let changed = sqlx::query("UPDATE tenant_subscriptions SET status=CASE WHEN trial_ends_at>now() THEN 'trial' ELSE 'active' END,updated_at=now() WHERE tenant_id=$1 AND status='suspended'")
+    let changed = sqlx::query("UPDATE tenant_subscriptions SET status=CASE WHEN trial_ends_at>now() THEN 'trial' ELSE 'active' END,current_period_ends_at=GREATEST(COALESCE(current_period_ends_at,now()),now())+interval '7 days',updated_at=now() WHERE tenant_id=$1 AND status='suspended'")
         .bind(tenant_id).execute(&state.db).await.map_err(internal)?.rows_affected();
     if changed == 0 {
         return Err(error(
@@ -2500,14 +4081,14 @@ async fn platform_set_courtesy(
     Path(tenant_id): Path<Uuid>,
     Json(request): Json<CourtesyRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1)")
-        .bind(tenant_id)
-        .fetch_one(&state.db)
-        .await
-        .map_err(internal)?;
-    if !exists {
-        return Err(error(StatusCode::NOT_FOUND, "tenant não encontrado"));
-    }
+    let current = sqlx::query_as::<_, (Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT s.billing_mode,s.courtesy_until FROM tenants t LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id WHERE t.id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "tenant não encontrado"))?;
     let note = request
         .note
         .as_deref()
@@ -2544,6 +4125,11 @@ async fn platform_set_courtesy(
 
     let now = chrono::Utc::now();
     let max_courtesy = now + chrono::Duration::days(730);
+    // Estender soma ao prazo atual; conceder de novo parte de hoje.
+    let base = match current.1 {
+        Some(until) if current.0.as_deref() == Some("courtesy") && until > now => until,
+        _ => now,
+    };
     let until = match request.until {
         Some(value) => value,
         None => {
@@ -2554,7 +4140,7 @@ async fn platform_set_courtesy(
                     "período de cortesia deve ter entre 1 e 24 meses",
                 ));
             }
-            now + chrono::Duration::days(months * 30)
+            base + chrono::Duration::days(months * 30)
         }
     };
     if until <= now || until > max_courtesy {
@@ -3728,8 +5314,154 @@ async fn ensure_identity_schema(pool: &PgPool) {
     }
 }
 
+/// Aplica a 0019 quando o banco ainda não tem as colunas de arquivamento.
+async fn ensure_platform_ops_schema(pool: &PgPool) {
+    let ready = sqlx::query_scalar::<_, bool>(
+        "SELECT
+            (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenants' AND column_name='archived_at') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='units' AND column_name='active') > 0
+            AND to_regclass('public.tenant_plan_history') IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if ready {
+        return;
+    }
+    warn!("schema de operação da plataforma ausente; aplicando 0019 na inicialização");
+    for statement in sql_statements(include_str!("../migrations/0019_platform_ops.sql")) {
+        if let Err(error) = sqlx::raw_sql(statement).execute(pool).await {
+            warn!(
+                "migration 0019 falhou em [{}]: {error}",
+                statement.chars().take(90).collect::<String>()
+            );
+        }
+    }
+}
+
+async fn system_audit(pool: &PgPool, action: &str, tenant_id: Uuid, metadata: Value) {
+    if let Err(cause) = sqlx::query(
+        "INSERT INTO platform_audit_events(admin_id,action,tenant_id,metadata) VALUES(NULL,$1,$2,$3)",
+    )
+    .bind(action)
+    .bind(tenant_id)
+    .bind(metadata)
+    .execute(pool)
+    .await
+    {
+        warn!(?cause, "falha ao gravar auditoria automática");
+    }
+}
+
+/// Rede de segurança da cobrança: sem webhook, trial/assinatura vencida entra
+/// em `past_due` e, depois de 7 dias de carência, em `suspended`.
+async fn billing_sweep(pool: &PgPool) {
+    let expired_trials = sqlx::query_scalar::<_, Uuid>(
+        "UPDATE tenant_subscriptions s SET status='past_due',updated_at=now()
+         FROM tenants t
+         WHERE t.id=s.tenant_id AND t.archived_at IS NULL
+           AND s.status='trial' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at<=now()
+         RETURNING s.tenant_id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for tenant_id in expired_trials {
+        system_audit(pool, "subscription.trial_expired", tenant_id, serde_json::json!({})).await;
+    }
+
+    let overdue = sqlx::query_scalar::<_, Uuid>(
+        "UPDATE tenant_subscriptions s SET status='past_due',updated_at=now()
+         FROM tenants t
+         WHERE t.id=s.tenant_id AND t.archived_at IS NULL
+           AND s.status='active' AND s.billing_mode='paid'
+           AND s.current_period_ends_at IS NOT NULL AND s.current_period_ends_at<=now()
+         RETURNING s.tenant_id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for tenant_id in overdue {
+        system_audit(
+            pool,
+            "subscription.period_ended",
+            tenant_id,
+            serde_json::json!({}),
+        )
+        .await;
+    }
+
+    let courtesy_over = sqlx::query_scalar::<_, Uuid>(
+        "UPDATE tenant_subscriptions s SET status='past_due',updated_at=now()
+         FROM tenants t
+         WHERE t.id=s.tenant_id AND t.archived_at IS NULL
+           AND s.status='active' AND s.billing_mode='courtesy'
+           AND s.courtesy_until IS NOT NULL AND s.courtesy_until<=now()
+         RETURNING s.tenant_id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for tenant_id in courtesy_over {
+        system_audit(
+            pool,
+            "subscription.courtesy_ended",
+            tenant_id,
+            serde_json::json!({}),
+        )
+        .await;
+    }
+
+    let suspended = sqlx::query_scalar::<_, Uuid>(
+        "UPDATE tenant_subscriptions s SET status='suspended',updated_at=now()
+         FROM tenants t
+         WHERE t.id=s.tenant_id AND t.archived_at IS NULL
+           AND s.status='past_due'
+           AND COALESCE(s.courtesy_until,s.current_period_ends_at,s.trial_ends_at)<=now()-interval '7 days'
+         RETURNING s.tenant_id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for tenant_id in &suspended {
+        system_audit(
+            pool,
+            "subscription.suspended_for_billing",
+            *tenant_id,
+            serde_json::json!({"grace_days": 7}),
+        )
+        .await;
+    }
+    if !suspended.is_empty() {
+        let _ = sqlx::query(
+            "UPDATE licenses l SET status='suspended',updated_at=now()
+             FROM tenant_subscriptions s
+             WHERE s.tenant_id=l.tenant_id AND s.status='suspended' AND l.status='active'",
+        )
+        .execute(pool)
+        .await;
+        info!(count = suspended.len(), "assinaturas suspensas por falta de pagamento");
+    }
+}
+
+async fn run_billing_sweeper(pool: PgPool) {
+    let hours = env::var("BILLING_SWEEP_HOURS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(6)
+        .clamp(1, 24);
+    let mut ticker =
+        tokio::time::interval(std::time::Duration::from_secs(hours * 60 * 60));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        billing_sweep(&pool).await;
+    }
+}
+
 async fn bootstrap(pool: &PgPool) -> Result<(), sqlx::Error> {
     ensure_identity_schema(pool).await;
+    ensure_platform_ops_schema(pool).await;
     if let (Ok(email), Ok(password)) = (
         env::var("SUPERADMIN_EMAIL"),
         env::var("SUPERADMIN_PASSWORD"),
@@ -3910,6 +5642,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Migrations aplicadas manualmente via psql (0001..0017 já estão no banco e registradas em _sqlx_migrations).
     // Não executar sqlx::migrate!() automaticamente para evitar VersionMismatch de checksums.
     bootstrap(&pool).await?;
+    if env::var("BILLING_SWEEP_ENABLED")
+        .map(|value| value != "false" && value != "0")
+        .unwrap_or(true)
+    {
+        tokio::spawn(run_billing_sweeper(pool.clone()));
+    }
     let state = Arc::new(AppState { db: pool });
     let app = Router::new()
         .route("/health", get(health))
@@ -3946,7 +5684,95 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/api/v1/platform/tenants/{tenant_id}",
-            get(platform_tenant_detail),
+            get(platform_tenant_detail)
+                .patch(platform_update_tenant)
+                .delete(platform_archive_tenant),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/unarchive",
+            post(platform_unarchive_tenant),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/plan",
+            post(platform_change_plan),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/plan-history",
+            get(platform_plan_history),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/owner-password",
+            post(platform_reset_owner_password),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/units",
+            get(platform_tenant_units).post(platform_create_unit),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/units/{unit_id}",
+            patch(platform_update_unit),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/terminals",
+            get(platform_tenant_terminals),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/terminals/{terminal_id}",
+            patch(platform_update_terminal),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/users",
+            get(platform_tenant_users),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/users/{user_id}",
+            patch(platform_update_user),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/users/{user_id}/password",
+            post(platform_reset_user_password),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/payments",
+            get(platform_tenant_payments),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/flags",
+            get(platform_tenant_flags),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/flags/{key}",
+            put(platform_set_tenant_flag),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/impersonate",
+            post(platform_impersonate_tenant),
+        )
+        .route("/api/v1/platform/billing/queue", get(platform_billing_queue))
+        .route("/api/v1/platform/audit", get(platform_audit_list))
+        .route("/api/v1/platform/metrics", get(platform_metrics))
+        .route("/api/v1/platform/analytics", get(platform_analytics))
+        .route("/api/v1/platform/leads", get(platform_leads))
+        .route(
+            "/api/v1/platform/leads/{lead_id}",
+            patch(platform_update_lead),
+        )
+        .route("/api/v1/platform/flags", get(platform_flags))
+        .route(
+            "/api/v1/platform/flags/{key}",
+            patch(platform_update_flag),
+        )
+        .route(
+            "/api/v1/platform/export/tenants.csv",
+            get(platform_export_tenants),
+        )
+        .route(
+            "/api/v1/platform/export/payments.csv",
+            get(platform_export_payments),
+        )
+        .route(
+            "/api/v1/platform/export/audit.csv",
+            get(platform_export_audit),
         )
         .route(
             "/api/v1/platform/tenants/{tenant_id}/units/{unit_id}/activation-codes",
