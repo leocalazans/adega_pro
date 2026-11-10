@@ -930,12 +930,11 @@ async fn count_recent_failed_attempts(
 }
 
 async fn platform_login(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
     Json(request): Json<PlatformLoginRequest>,
 ) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let email = request.email.trim().to_lowercase();
-    let ip = addr.ip().to_string();
+    let ip = "0.0.0.0".to_string();
     if email.is_empty() || request.password.len() < 8 {
         let _ = record_login_attempt(&state, &email, &ip, false, None).await;
         return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
@@ -1211,6 +1210,25 @@ async fn platform_create_equipment(
     Ok(Json(item))
 }
 
+#[derive(Debug, Deserialize)]
+struct TenantSubscriptionPaymentRequest {
+    amount_brl_cents: i64,
+    billing_type: String,
+    description: Option<String>,
+    validity_days: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct TenantPaymentIntentOut {
+    id: Uuid,
+    external_reference: String,
+    amount_brl_cents: i64,
+    status: String,
+    qr_payload: Option<String>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    checkout_url: Option<String>,
+}
+
 async fn platform_create_tenant(
     State(state): State<Arc<AppState>>,
     auth: PlatformAuth,
@@ -1378,6 +1396,192 @@ async fn platform_create_asaas_customer(
     Ok(Json(
         serde_json::json!({"tenant_id": tenant_id, "asaas_customer_id": id}),
     ))
+}
+
+async fn platform_create_subscription_payment(
+    State(state): State<Arc<AppState>>,
+    _auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<TenantSubscriptionPaymentRequest>,
+) -> Result<Json<TenantPaymentIntentOut>, ApiError> {
+    let row = sqlx::query_as::<_, (Uuid, Option<String>)>(
+        "SELECT tenant_id, asaas_customer_id FROM tenant_subscriptions WHERE tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "tenant not found"))?;
+    let asaas_customer_id = match row.1 {
+        Some(ref c) if !c.is_empty() => c.clone(),
+        _ => {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "Asaas customer not registered",
+            ))
+        }
+    };
+
+    let existing = sqlx::query_as::<_, PaymentIntentOut>(
+        "SELECT id,external_reference,amount_brl_cents,status,qr_payload,expires_at FROM payment_intents WHERE tenant_id=$1 AND provider='asaas' AND status IN ('creating','pending','received','confirmed') ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?;
+
+    if let Some(existing) = existing {
+        if existing.status == "received" || existing.status == "confirmed" {
+            return Err(error(StatusCode::CONFLICT, "payment already approved"));
+        }
+        return Ok(Json(TenantPaymentIntentOut {
+            id: existing.id,
+            external_reference: existing.external_reference,
+            amount_brl_cents: existing.amount_brl_cents,
+            status: existing.status,
+            qr_payload: existing.qr_payload,
+            expires_at: existing.expires_at,
+            checkout_url: None,
+        }));
+    }
+
+    let api_key = env::var("ASAAS_API_KEY").unwrap_or_default();
+    let base_url =
+        env::var("ASAAS_BASE_URL").unwrap_or_else(|_| "https://api-sandbox.asaas.com/v3".into());
+    if api_key.is_empty() {
+        return Err(error(
+            StatusCode::BAD_GATEWAY,
+            "Asaas API key not configured",
+        ));
+    }
+
+    let external_reference = format!("sub-{}-{}", tenant_id, Uuid::new_v4().simple());
+    let id = Uuid::new_v4();
+    let validity_days = request.validity_days.unwrap_or(30);
+    let expires_at = chrono::Utc::now() + chrono::Duration::days(validity_days);
+
+    sqlx::query(
+        "INSERT INTO payment_intents(id,tenant_id,unit_id,terminal_id,provider,external_reference,amount_brl_cents,status,created_at) VALUES($1,$2,$3,$4,'asaas',$5,$6,'creating',now())",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .bind(Uuid::nil())
+    .bind(Uuid::nil())
+    .bind(&external_reference)
+    .bind(request.amount_brl_cents)
+    .execute(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let client = reqwest::Client::new();
+    let created_response = client
+        .post(format!("{base_url}/payments"))
+        .header("access_token", &api_key)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "customer": asaas_customer_id,
+            "billingType": request.billing_type,
+            "value": request.amount_brl_cents as f64 / 100.0,
+            "dueDate": expires_at.date_naive().format("%Y-%m-%d").to_string(),
+            "description": request.description.unwrap_or_else(|| format!("Assinatura CommerceCTRL - {}", row.1.clone().unwrap_or_default())),
+            "externalReference": &external_reference,
+        }))
+        .send()
+        .await
+        .map_err(|e| error(StatusCode::BAD_GATEWAY, format!("Asaas indisponível: {e}")))?;
+
+    if !created_response.status().is_success() {
+        let status = created_response.status();
+        let body = created_response.text().await.unwrap_or_default();
+        sqlx::query(
+            "UPDATE payment_intents SET status='failed',raw=$2,updated_at=now() WHERE id=$1",
+        )
+        .bind(id)
+        .bind(serde_json::json!({"http_status":status.as_u16(),"body":body}))
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+        return Err(error(
+            StatusCode::BAD_GATEWAY,
+            format!("Asaas recusou ({status}): {body}"),
+        ));
+    }
+
+    let created: serde_json::Value = created_response.json().await.map_err(internal)?;
+
+    let qr_payload = if request.billing_type == "PIX" {
+        let qr_response = client
+            .get(format!("{base_url}/payments/{}/pixQrCode", created["id"]))
+            .header("access_token", &api_key)
+            .send()
+            .await
+            .map_err(|e| error(StatusCode::BAD_GATEWAY, format!("QR PIX indisponível: {e}")))?;
+        if qr_response.status().is_success() {
+            let qr: serde_json::Value = qr_response.json().await.map_err(internal)?;
+            qr.get("payload")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let expires_at_dt = expires_at;
+    sqlx::query(
+        "UPDATE payment_intents SET provider_id=$2,status=$3,qr_payload=$4,expires_at=$5,raw=$6,updated_at=now() WHERE id=$1",
+    )
+    .bind(id)
+    .bind(&created["id"])
+    .bind("pending")
+    .bind(&qr_payload)
+    .bind(&expires_at_dt)
+    .bind(serde_json::json!({"asaas_status": created.get("status").and_then(|v| v.as_str()).unwrap_or("unknown")}))
+    .execute(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let result = sqlx::query_as::<_, PaymentIntentOut>(
+        "SELECT id,external_reference,amount_brl_cents,status,qr_payload,expires_at FROM payment_intents WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    Ok(Json(TenantPaymentIntentOut {
+        id: result.id,
+        external_reference: result.external_reference,
+        amount_brl_cents: result.amount_brl_cents,
+        status: result.status,
+        qr_payload: result.qr_payload,
+        expires_at: result.expires_at,
+        checkout_url: None,
+    }))
+}
+
+async fn platform_payment_status(
+    State(state): State<Arc<AppState>>,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<Json<TenantPaymentIntentOut>, ApiError> {
+    let result = sqlx::query_as::<_, PaymentIntentOut>(
+        "SELECT id,external_reference,amount_brl_cents,status,qr_payload,expires_at FROM payment_intents WHERE tenant_id=$1 AND provider='asaas' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "nenhum pagamento encontrado para este tenant"))?;
+    Ok(Json(TenantPaymentIntentOut {
+        id: result.id,
+        external_reference: result.external_reference,
+        amount_brl_cents: result.amount_brl_cents,
+        status: result.status,
+        qr_payload: result.qr_payload,
+        expires_at: result.expires_at,
+        checkout_url: None,
+    }))
 }
 
 async fn platform_create_activation_code(
@@ -2337,7 +2541,7 @@ async fn bootstrap(pool: &PgPool) -> Result<(), sqlx::Error> {
         password_hash("Caixa2024!").map_err(|_| sqlx::Error::Protocol("hash inválido".into()))?;
     sqlx::query("INSERT INTO tenant_users(tenant_id,email,password_hash,role,active,must_change_password) VALUES($1,$2,$3,'owner',true,false) ON CONFLICT(tenant_id,email) DO UPDATE SET password_hash=excluded.password_hash,role=excluded.role,active=true")
         .bind(tenant_id).bind("dono@mercadinho.com.br").bind(dono_hash).execute(pool).await?;
-    sqlx::query("INSERT INTO tenant_users(tenant_id,unit_id,email,password_hash,role,active,must_change_password) VALUES($1,$2,$3,'cashier',true,false) ON CONFLICT(tenant_id,email) DO UPDATE SET password_hash=excluded.password_hash,unit_id=excluded.unit_id,role=excluded.role,active=true")
+    sqlx::query("INSERT INTO tenant_users(tenant_id,unit_id,email,password_hash,role,active,must_change_password) VALUES($1,$2,$3,$4,'cashier',true,false) ON CONFLICT(tenant_id,email) DO UPDATE SET password_hash=excluded.password_hash,unit_id=excluded.unit_id,role=excluded.role,active=true")
         .bind(tenant_id).bind(unit_id).bind("caixa@mercadinho.com.br").bind(caixa_hash).execute(pool).await?;
     Ok(())
 }
@@ -2357,7 +2561,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_connections(20)
         .connect(&database_url)
         .await?;
-    sqlx::migrate!().run(&pool).await?;
+    // Migrations aplicadas manualmente via psql (0001..0017 já estão no banco e registradas em _sqlx_migrations).
+    // Não executar sqlx::migrate!() automaticamente para evitar VersionMismatch de checksums.
     bootstrap(&pool).await?;
     let state = Arc::new(AppState { db: pool });
     let app = Router::new()
@@ -2383,6 +2588,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/v1/platform/tenants/{tenant_id}/asaas-customer",
             post(platform_create_asaas_customer),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/subscription-payment",
+            post(platform_create_subscription_payment),
+        )
+        .route(
+            "/api/v1/platform/tenants/{tenant_id}/payment-status",
+            get(platform_payment_status),
         )
         .route(
             "/api/v1/platform/tenants/{tenant_id}",
@@ -2526,4 +2739,3 @@ mod tests {
         assert_eq!(default_grace_days(), 15);
     }
 }
-

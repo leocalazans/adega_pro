@@ -6,22 +6,24 @@
   background: #e8eaf6;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  /* Blueprint CommerceCTRL: azul profundo, fundo dessaturado, roxo de ação. */
-  --primary: #3f51b5;
-  --primary-dark: #303da3;
-  --primary-wash: #e2e5f8;
-  --accent: #7e57c2;
-  --accent-wash: #ece5f8;
-  --paper: #e8eaf6;
+  /* Identidade CommerceCTRL: creme acolhedor, verde floresta, verde lima. */
+  --primary: #0D5C3A;
+  --primary-dark: #0A462A;
+  --primary-wash: #E8F3EC;
+  --accent: #D4F631;
+  --accent-wash: #F3FDE8;
+  --paper: #F5F3E9;
   --surface: #ffffff;
   --ticket: #fffdf7;
   --ink: #1a1e3c;
   --muted: #5b6080;
   --line: #d3d7ec;
   --danger: #b3263a;
-  --success: #0f6b4a;
+  --success: #0D5C3A;
   --warning-ink: #7a5200;
   --warning-wash: #fff4d6;
+  --danger-ink: #e14928;
+  --danger-wash: #fff1b5;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 18px;

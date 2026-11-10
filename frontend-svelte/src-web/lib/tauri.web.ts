@@ -119,6 +119,57 @@ export async function cloudOwnerOverview(from: number, to: number): Promise<any>
   });
 }
 
+export interface PlatformTenantCreateRequest {
+  name: string;
+  unit_name: string;
+  plan: string;
+  trial_days?: number;
+  create_asaas_customer?: boolean;
+}
+
+export interface PlatformTenantCreated {
+  tenant_id: string;
+  unit_id: string;
+}
+
+export async function platformCreateTenant(req: PlatformTenantCreateRequest): Promise<PlatformTenantCreated> {
+  return apiFetch<PlatformTenantCreated>("/api/v1/platform/tenants", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export interface TenantSubscriptionPaymentRequest {
+  amount_brl_cents: number;
+  billing_type: string;
+  description?: string;
+  validity_days?: number;
+}
+
+export interface TenantPaymentIntentOut {
+  id: string;
+  external_reference: string;
+  amount_brl_cents: number;
+  status: string;
+  qr_payload?: string | null;
+  expires_at?: string | null;
+  checkout_url?: string | null;
+}
+
+export async function platformCreateSubscriptionPayment(
+  tenantId: string,
+  req: TenantSubscriptionPaymentRequest,
+): Promise<TenantPaymentIntentOut> {
+  return apiFetch<TenantPaymentIntentOut>(
+    `/api/v1/platform/tenants/${tenantId}/subscription-payment`,
+    { method: "POST", body: JSON.stringify(req) },
+  );
+}
+
+export async function platformPaymentStatus(tenantId: string): Promise<TenantPaymentIntentOut> {
+  return apiFetch<TenantPaymentIntentOut>(`/api/v1/platform/tenants/${tenantId}/payment-status`);
+}
+
 export async function getDisplaySettings(): Promise<any> {
   return apiFetch("/api/v1/display/settings");
 }

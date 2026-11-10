@@ -34,6 +34,9 @@
   let conflicts = $state(0);
   let syncError = $state("");
   let isDesktop = $state(true);
+  let activationChecked = $state(false);
+  let terminalActivated = $state(false);
+  let activationApiUrl = $state("");
   let adminExitOpen = $state(false);
   let adminConfigured = $state(true);
   let adminPin = $state("");
@@ -43,9 +46,6 @@
   let clientName = $state("Sua loja");
   let clientLogo = $state("");
   let session = $state<UserSession | null>(null);
-  let activationChecked = $state(false);
-  let terminalActivated = $state(false);
-  let activationApiUrl = $state("");
 
   const navigate = (href: string) => {
     history.pushState({}, "", href);
