@@ -163,6 +163,7 @@ export interface SignupRequest {
   name: string;
   unit_name: string;
   email: string;
+  password: string;
   cnpj_cpf?: string;
   phone?: string;
   plan: string;
@@ -177,12 +178,9 @@ export interface SignupCreated {
   name: string;
   slug: string;
   trial_ends_at: string;
-  asaas_customer_id?: string | null;
   billing_mode: string;
   courtesy_until?: string | null;
   owner_email: string;
-  owner_password: string;
-  owner_key: string;
   payment?: TenantPaymentIntentOut | null;
   payment_error?: string | null;
 }
@@ -198,6 +196,7 @@ export interface PlatformTenantCreateRequest {
   name: string;
   unit_name: string;
   email?: string;
+  password?: string;
   cnpj_cpf?: string;
   phone?: string;
   plan: string;

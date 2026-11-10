@@ -129,6 +129,8 @@ struct PlatformTenantCreateRequest {
     name: String,
     unit_name: String,
     email: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
     cnpj_cpf: Option<String>,
     phone: Option<String>,
     #[serde(default = "default_plan")]
@@ -163,6 +165,8 @@ struct SignupRequest {
     unit_name: String,
     email: String,
     #[serde(default)]
+    password: String,
+    #[serde(default)]
     cnpj_cpf: Option<String>,
     #[serde(default)]
     phone: Option<String>,
@@ -178,8 +182,14 @@ struct SignupRequest {
 
 #[derive(Debug, Serialize)]
 struct SignupCreated {
-    #[serde(flatten)]
-    tenant: PlatformTenantCreated,
+    tenant_id: Uuid,
+    unit_id: Uuid,
+    name: String,
+    slug: String,
+    trial_ends_at: chrono::DateTime<chrono::Utc>,
+    billing_mode: String,
+    courtesy_until: Option<chrono::DateTime<chrono::Utc>>,
+    owner_email: String,
     payment: Option<TenantPaymentIntentOut>,
     payment_error: Option<String>,
 }
@@ -1761,7 +1771,23 @@ async fn provision_tenant(
         .filter(|value| !value.is_empty())
         .map(str::to_lowercase)
         .unwrap_or_else(|| format!("dono@{slug}.commercectrl.local"));
-    let owner_password = temporary_password();
+    let chosen_password = request
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(password) = chosen_password {
+        if password.len() < 8 || password.len() > 128 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "a senha deve ter entre 8 e 128 caracteres",
+            ));
+        }
+    }
+    let owner_password = chosen_password
+        .map(str::to_string)
+        .unwrap_or_else(temporary_password);
+    let must_change_password = chosen_password.is_none();
     let owner_password_hash = password_hash(&owner_password)?;
     let owner_key = random_secret("ok_");
 
@@ -1834,10 +1860,11 @@ async fn provision_tenant(
     .execute(&mut *tx)
     .await
     .map_err(internal)?;
-    sqlx::query("INSERT INTO tenant_users(tenant_id,email,password_hash,role,active,must_change_password,display_name,source) VALUES($1,$2,$3,'owner',true,true,$4,'cloud')")
+    sqlx::query("INSERT INTO tenant_users(tenant_id,email,password_hash,role,active,must_change_password,display_name,source) VALUES($1,$2,$3,'owner',true,$4,$5,'cloud')")
         .bind(tenant_id)
         .bind(&owner_email)
         .bind(&owner_password_hash)
+        .bind(must_change_password)
         .bind(format!("Administrador {name}"))
         .execute(&mut *tx)
         .await
@@ -1936,6 +1963,13 @@ async fn public_signup(
             "dados do cadastro inválidos",
         ));
     }
+    let signup_password = request.password.trim();
+    if signup_password.len() < 8 || signup_password.len() > 128 {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "a senha deve ter entre 8 e 128 caracteres",
+        ));
+    }
     let billing_type = request
         .billing_type
         .as_deref()
@@ -1974,6 +2008,7 @@ async fn public_signup(
         name: name.to_string(),
         unit_name: unit_name.to_string(),
         email: Some(email),
+        password: Some(signup_password.to_string()),
         cnpj_cpf: request
             .cnpj_cpf
             .as_deref()
@@ -2031,7 +2066,14 @@ async fn public_signup(
     }
     info!(tenant=%created.tenant_id, plan=%create.plan, "tenant criado por autoatendimento");
     Ok(Json(SignupCreated {
-        tenant: created,
+        tenant_id: created.tenant_id,
+        unit_id: created.unit_id,
+        name: created.name,
+        slug: created.slug,
+        trial_ends_at: created.trial_ends_at,
+        billing_mode: created.billing_mode,
+        courtesy_until: created.courtesy_until,
+        owner_email: created.owner_email,
         payment,
         payment_error,
     }))
