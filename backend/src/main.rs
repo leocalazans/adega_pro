@@ -2540,10 +2540,16 @@ impl FromRequestParts<Arc<AppState>> for PanelAuth {
         // Web: sessão do usuário do tenant. O bloqueio de escrita por assinatura
         // vencida é aplicado dentro do TenantAuth.
         let auth = TenantAuth::from_request_parts(parts, state).await?;
-        if !matches!(auth.role.as_str(), "owner" | "admin" | "manager") {
+        let privileged = matches!(auth.role.as_str(), "owner" | "admin" | "manager");
+        if !privileged
+            && !matches!(
+                parts.method,
+                axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+            )
+        {
             return Err(error(
                 StatusCode::FORBIDDEN,
-                "perfil sem acesso ao painel do lojista",
+                "perfil sem permissão para alterar o painel",
             ));
         }
         Ok(Self {
