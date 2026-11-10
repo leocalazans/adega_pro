@@ -1,24 +1,21 @@
 <script lang="ts">
   import { Building2, CheckCircle2, ChevronLeft, ChevronRight, ImageUp, MapPin, PackagePlus, ShieldCheck, QrCode, Smartphone, Link2 } from "@lucide/svelte";
-  import { cloudSaveOwnerBranding, platformCreateTenant, platformCreateSubscriptionPayment } from "../lib/tauri.web";
+  import { signupTenant } from "../lib/tauri.web";
   import type { TenantPaymentIntentOut } from "../lib/tauri.web";
   let { onDone }: { onDone: () => void } = $props();
-  let step=$state(0), saving=$state(false), message=$state(""), plan=$state("profissional");
+  let step=$state(0), saving=$state(false), message=$state(""), plan=$state("starter");
   let storeName=$state(""), legalName=$state(""), cnpj=$state(""), ie=$state(""), email=$state(""), phone=$state(""), address=$state(""), unitName=$state("Matriz"), logo=$state("");
   let paymentMethod=$state("pix"); // pix, credit_card, boleto
   let paymentResult=$state<TenantPaymentIntentOut | null>(null);
+  let paymentError=$state("");
+  let ownerEmail=$state(""), ownerPassword=$state(""), tenantSlug=$state("");
   let tenantCreatedId=$state<string | null>(null);
   const steps=["Empresa","Primeira unidade","Identidade","Plano e pagamento","Concluir"];
   const plans=[
-    {id:"essencial",name:"Essencial",price:"R$ 149/mês",detail:"1 unidade · operação de caixa"},
-    {id:"profissional",name:"Profissional",price:"R$ 399/mês",detail:"Até 4 unidades · gestão consolidada"},
-    {id:"rede",name:"Rede",price:"Sob consulta",detail:"Mais unidades · implantação assistida"},
+    {id:"starter",name:"Começar",price:"R$ 100/mês",detail:"PDV, estoque e relatórios básicos · sem emissão fiscal"},
+    {id:"fiscal",name:"Fiscal",price:"R$ 180/mês",detail:"Inclui recursos fiscais após homologação por UF"},
+    {id:"premium",name:"PDV Premium",price:"R$ 250/mês",detail:"Multiunidade, TV de ofertas e recursos premium"},
   ];
-  const planPrices: Record<string, number> = {
-    essencial: 14900,
-    profissional: 39900,
-    rede: 0,
-  };
   const paymentOptions=[
     {id:"pix",name:"PIX",detail:"Pagamento à vista via QR Code ou Copia e Cola",icon:"<path d=\"M21 12a9 9 0 01-9-9V4.5l3-3m0 0l-3 3m3-3v13.5A9 9 0 013 21c0 4.971 4.029 9 9 9s9-4.029 9-9v-10.5M3 12l3 3m0 0l3-3m-3 3v13.5\" stroke=\"#22c55e\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>"},
     {id:"credit_card",name:"Cartão de crédito",detail:"Parcelado em até 12x",icon:"<rect width=\"18\" height=\"12\" x=\"3\" y=\"6\" rx=\"2\" ry=\"2\" stroke=\"#3b82f6\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\" stroke=\"#3b82f6\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><circle cx=\"12\" cy=\"6\" r=\"1\" fill=\"#3b82f6\"/>"},
@@ -26,41 +23,39 @@
   ];
   const desktopDownloadUrl = import.meta.env.VITE_DESKTOP_DOWNLOAD_URL as string | undefined;
   async function chooseLogo(event:Event){const file=(event.currentTarget as HTMLInputElement).files?.[0];if(!file)return;const bitmap=await createImageBitmap(file);const scale=Math.min(1,512/Math.max(bitmap.width,bitmap.height));const canvas=document.createElement("canvas");canvas.width=Math.round(bitmap.width*scale);canvas.height=Math.round(bitmap.height*scale);canvas.getContext("2d")?.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();logo=canvas.toDataURL("image/webp",.84)}
-  async function finish(){saving=true;message="";try{
-    const saved=await cloudSaveOwnerBranding(storeName.trim(),logo);
-    const branding={name:saved.display_name,logo:saved.logo_data_url||""};
-    localStorage.setItem("commercectrl.client.branding",JSON.stringify(branding));
-
-    // Criar tenant na plataforma
-    const created=await platformCreateTenant({
+  async function finish(){saving=true;message="";paymentError="";try{
+    const created=await signupTenant({
       name: storeName.trim(),
       unit_name: unitName.trim(),
+      email: email.trim(),
+      cnpj_cpf: cnpj.trim() || undefined,
+      phone: phone.trim() || undefined,
       plan,
-      trial_days: 30,
-      create_asaas_customer: false, // o cliente Asaas será criado pelo webhook/cobrança
+      billing_type: paymentMethod === "pix" ? "PIX" : paymentMethod === "credit_card" ? "CREDIT_CARD" : "BOLETO",
+      logo_data_url: logo || undefined,
+      primary_color: "#0D5C3A",
     });
     tenantCreatedId = created.tenant_id;
+    tenantSlug = created.slug;
+    ownerEmail = created.owner_email;
+    ownerPassword = created.owner_password;
+    paymentResult = created.payment ?? null;
+    paymentError = created.payment_error ?? "";
+
+    const branding={name:created.name,logo:logo||""};
+    localStorage.setItem("commercectrl.client.branding",JSON.stringify(branding));
     localStorage.setItem("commercectrl.client.tenant_id", created.tenant_id);
-
-    // Criar cobrança de assinatura via Asaas
-    const amount = planPrices[plan] ?? 0;
-    const billingType = paymentMethod === "pix" ? "PIX" : paymentMethod === "credit_card" ? "CREDIT_CARD" : "BOLETO";
-    const desc = `Assinatura CommerceCTRL - ${storeName.trim()} (${plan})`;
-    paymentResult = await platformCreateSubscriptionPayment(created.tenant_id, {
-      amount_brl_cents: amount,
-      billing_type: billingType,
-      description: desc,
-      validity_days: 30,
-    });
-
-    localStorage.setItem("commercectrl.onboarding.profile",JSON.stringify({legalName,cnpj,ie,email,phone,address,unitName,plan,paymentMethod,tenant_id:created.tenant_id}));
-    localStorage.setItem("commercectrl.client.payment",JSON.stringify(paymentResult));
+    localStorage.setItem("commercectrl.client.tenant_slug", created.slug);
+    localStorage.setItem("commercectrl.onboarding.profile",JSON.stringify({legalName,cnpj,ie,email,phone,address,unitName,plan,paymentMethod,tenant_id:created.tenant_id,slug:created.slug}));
+    if (created.payment) localStorage.setItem("commercectrl.client.payment",JSON.stringify(created.payment));
     window.dispatchEvent(new CustomEvent("commercectrl-branding",{detail:branding}));
-    message=`Assinatura criada! ${paymentResult.qr_payload ? "Escaneie o QR Code PIX abaixo." : "Acesse o link de pagamento para concluir."}`;
+    message = created.payment
+      ? (created.payment.qr_payload ? "Assinatura criada! Escaneie o QR Code PIX abaixo." : "Assinatura criada! Acesse o link de pagamento para concluir.")
+      : "Loja criada em período de teste. Gere a cobrança para ativar a assinatura.";
     step=4;
-  }catch(error){message=error instanceof Error?error.message:"Não foi possível salvar agora. Verifique a conexão."}finally{saving=false}}
+  }catch(error){message=error instanceof Error?error.message:"Não foi possível criar a loja agora. Verifique a conexão."}finally{saving=false}}
 </script>
-<main class="onboarding"><aside><a href="/" class="wordmark">_,CTRL</a><div><p>Primeira abertura</p><h1>Vamos abrir sua operação.</h1><span>O cadastro fica por conta do administrador do mercado.</span></div><ol>{#each steps as label,index}<li class:current={step===index} class:done={step>index}><i>{#if step>index}<CheckCircle2 size={15}/>{:else}{index+1}{/if}</i>{label}</li>{/each}</ol><small>Você poderá revisar estes dados depois.</small></aside><section class="onboarding-content"><header><span>Etapa {step+1} de {steps.length}</span><strong>{steps[step]}</strong></header>
+<main class="onboarding"><aside><a href="/" class="wordmark">_,CTRL</a><div><p>Primeira abertura</p><h1>Vamos abrir sua operação.</h1><span>Você cria a loja, recebe o acesso do administrador e já pode baixar o PDV.</span></div><ol>{#each steps as label,index}<li class:current={step===index} class:done={step>index}><i>{#if step>index}<CheckCircle2 size={15}/>{:else}{index+1}{/if}</i>{label}</li>{/each}</ol><small>Você poderá revisar estes dados depois.</small></aside><section class="onboarding-content"><header><span>Etapa {step+1} de {steps.length}</span><strong>{steps[step]}</strong></header>
   {#if step===0}<div class="form"><div class="intro"><Building2/><h2>Quem é o mercado?</h2><p>Usamos esses dados para identificar a operação, documentos e comunicações do sistema.</p></div><label>Nome fantasia<input class="input" required bind:value={storeName} placeholder="Ex.: Mercadinho Martins"/></label><label>Razão social<input class="input" bind:value={legalName} placeholder="Nome empresarial"/></label><label>CNPJ<input class="input" bind:value={cnpj} inputmode="numeric" placeholder="00.000.000/0001-00"/></label><label>Inscrição estadual<input class="input" bind:value={ie} placeholder="Opcional por enquanto"/></label><label>E-mail do responsável<input class="input" type="email" bind:value={email} placeholder="dono@mercado.com.br"/></label><label>Telefone<input class="input" bind:value={phone} placeholder="(11) 99999-9999"/></label></div>
   {:else if step===1}<div class="form"><div class="intro"><MapPin/><h2>Cadastre a primeira unidade</h2><p>Preço, estoque, promoções e telas de TV podem ser administrados por unidade.</p></div><label>Nome da unidade<input class="input" bind:value={unitName}/></label><label class="span2">Endereço completo<input class="input" bind:value={address} placeholder="Rua, número, bairro, cidade e CEP"/></label><div class="callout span2"><ShieldCheck size={19}/><span>Os dados fiscais ficam separados por unidade. Eles podem ser concluídos antes da emissão de NFC-e.</span></div></div>
   {:else if step===2}<div class="form"><div class="intro"><ImageUp/><h2>Deixe o mercado reconhecível</h2><p>A logo aparece de forma elegante no cabeçalho, comprovante e TV de ofertas. Ela é convertida para WebP.</p></div><label class="span2 upload">Logo do mercado<input class="input" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onchange={chooseLogo}/></label>{#if logo}<div class="logo-box span2"><img src={logo} alt="Prévia da logo"/><span>Prévia pronta para sincronização.</span></div>{/if}<div class="callout span2"><PackagePlus size={19}/><span>O próximo passo dentro do sistema será importar ou cadastrar produtos e imagens reais.</span></div></div>
@@ -68,12 +63,23 @@
   {:else}<div class="complete"><CheckCircle2/><h2>Base da loja preparada.</h2><p>{message || "Revise os dados e confirme para salvar a identidade do tenant."}</p>
     {#if tenantCreatedId}
       <div class="payment-panel">
+        <h3>Acesso do administrador</h3>
+        <div class="payment-info">
+          <p><strong>Loja:</strong> {tenantSlug}</p>
+          <p><strong>E-mail:</strong> {ownerEmail}</p>
+          <p><strong>Senha:</strong> <code>{ownerPassword}</code></p>
+        </div>
+        <p class="payment-note">Guarde estas credenciais: a senha é exibida apenas uma vez. No primeiro acesso o sistema pede a troca.</p>
+        <button class="copy-btn" onclick={()=>{navigator.clipboard.writeText(`Loja: ${tenantSlug}\nE-mail: ${ownerEmail}\nSenha: ${ownerPassword}`);message="Credenciais copiadas."}}>Copiar credenciais</button>
+      </div>
+      <div class="payment-panel">
         <div class="payment-info">
           <h3>Pagamento da assinatura</h3>
           <p><strong>Tenant:</strong> {tenantCreatedId}</p>
           <p><strong>Plano:</strong> {plan}</p>
           <p><strong>Status:</strong> {paymentResult?.status || "pendente"}</p>
         </div>
+        {#if paymentError}<p class="payment-note" style="color:#a33">{paymentError}</p>{/if}
         {#if paymentResult?.qr_payload}
           <div class="qr-box">
             <QrCode size={160} color="#0D5C3A" />

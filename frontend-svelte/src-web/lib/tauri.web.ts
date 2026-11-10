@@ -159,6 +159,41 @@ export async function cloudOwnerOverview(from: number, to: number): Promise<any>
   return apiFetch(`/api/v1/owner/overview?${params.toString()}`);
 }
 
+export interface SignupRequest {
+  name: string;
+  unit_name: string;
+  email: string;
+  cnpj_cpf?: string;
+  phone?: string;
+  plan: string;
+  billing_type?: "PIX" | "CREDIT_CARD" | "BOLETO";
+  logo_data_url?: string;
+  primary_color?: string;
+}
+
+export interface SignupCreated {
+  tenant_id: string;
+  unit_id: string;
+  name: string;
+  slug: string;
+  trial_ends_at: string;
+  asaas_customer_id?: string | null;
+  billing_mode: string;
+  courtesy_until?: string | null;
+  owner_email: string;
+  owner_password: string;
+  owner_key: string;
+  payment?: TenantPaymentIntentOut | null;
+  payment_error?: string | null;
+}
+
+export async function signupTenant(request: SignupRequest): Promise<SignupCreated> {
+  return apiFetch<SignupCreated>("/api/v1/signup", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
 export interface PlatformTenantCreateRequest {
   name: string;
   unit_name: string;

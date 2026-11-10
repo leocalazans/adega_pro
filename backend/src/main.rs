@@ -156,6 +156,45 @@ struct PlatformTenantCreated {
     owner_password: String,
     owner_key: String,
 }
+
+#[derive(Debug, Deserialize)]
+struct SignupRequest {
+    name: String,
+    unit_name: String,
+    email: String,
+    #[serde(default)]
+    cnpj_cpf: Option<String>,
+    #[serde(default)]
+    phone: Option<String>,
+    #[serde(default = "default_plan")]
+    plan: String,
+    #[serde(default)]
+    billing_type: Option<String>,
+    #[serde(default)]
+    logo_data_url: Option<String>,
+    #[serde(default)]
+    primary_color: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SignupCreated {
+    #[serde(flatten)]
+    tenant: PlatformTenantCreated,
+    payment: Option<TenantPaymentIntentOut>,
+    payment_error: Option<String>,
+}
+
+/// IP do cliente atrás do proxy do Render, com fallback para o socket.
+fn client_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| addr.ip().to_string())
+}
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct CommercialPlanOut {
     code: String,
@@ -1626,6 +1665,29 @@ async fn platform_create_tenant(
     auth: PlatformAuth,
     Json(request): Json<PlatformTenantCreateRequest>,
 ) -> Result<Json<PlatformTenantCreated>, ApiError> {
+    Ok(Json(
+        provision_tenant(&state, Some(&auth), &request, None).await?,
+    ))
+}
+
+/// Identidade visual opcional enviada no autoatendimento.
+#[derive(Debug, Default, Clone)]
+struct SignupBranding {
+    logo_data_url: Option<String>,
+    primary_color: Option<String>,
+}
+
+/// Cria tenant, unidade, assinatura e usuário owner. Usado pelo SuperAdmin e
+/// pelo autoatendimento público (com auditoria apenas no primeiro caso).
+async fn provision_tenant(
+    state: &Arc<AppState>,
+    admin: Option<&PlatformAuth>,
+    request: &PlatformTenantCreateRequest,
+    branding: Option<&SignupBranding>,
+) -> Result<PlatformTenantCreated, ApiError> {
+    let actor = admin
+        .map(|auth| auth.email.as_str())
+        .unwrap_or("self-signup");
     let name = request.name.trim();
     let unit_name = request.unit_name.trim();
     let billing_mode = request
@@ -1709,7 +1771,7 @@ async fn platform_create_tenant(
         {
             Ok(id) => asaas_customer_id = Some(id),
             Err(e) => {
-                warn!(admin=%auth.email, tenant=%tenant_id, "falha ao criar customer Asaas: {:?}", e)
+                warn!(actor, tenant=%tenant_id, "falha ao criar customer Asaas: {:?}", e)
             }
         }
     }
@@ -1742,11 +1804,18 @@ async fn platform_create_tenant(
         .execute(&mut *tx)
         .await
         .map_err(internal)?;
+    let brand_logo = branding.and_then(|value| value.logo_data_url.as_deref());
+    let brand_color = branding
+        .and_then(|value| value.primary_color.as_deref())
+        .filter(|color| color.len() == 7 && color.starts_with('#'))
+        .unwrap_or("#0D5C3A");
     sqlx::query(
-        "INSERT INTO tenant_branding(tenant_id,display_name,primary_color) VALUES($1,$2,'#0D5C3A') ON CONFLICT(tenant_id) DO NOTHING",
+        "INSERT INTO tenant_branding(tenant_id,display_name,logo_data_url,primary_color) VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id) DO NOTHING",
     )
     .bind(tenant_id)
     .bind(name)
+    .bind(brand_logo)
+    .bind(brand_color)
     .execute(&mut *tx)
     .await
     .map_err(internal)?;
@@ -1781,24 +1850,26 @@ async fn platform_create_tenant(
         .await
         .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
-    platform_audit(
-        &state.db,
-        auth.admin_id,
-        "tenant.created",
-        Some(tenant_id),
-        serde_json::json!({
-            "plan": request.plan,
-            "trial_days": request.trial_days,
-            "unit_id": unit_id,
-            "asaas_customer_id": asaas_customer_id,
-            "billing_mode": billing_mode,
-            "courtesy_until": courtesy_until,
-            "owner_email": owner_email
-        }),
-    )
-    .await;
-    info!(admin=%auth.email,tenant=%tenant_id,billing_mode=%billing_mode,"tenant provisionado pela plataforma");
-    Ok(Json(PlatformTenantCreated {
+    if let Some(auth) = admin {
+        platform_audit(
+            &state.db,
+            auth.admin_id,
+            "tenant.created",
+            Some(tenant_id),
+            serde_json::json!({
+                "plan": request.plan,
+                "trial_days": request.trial_days,
+                "unit_id": unit_id,
+                "asaas_customer_id": asaas_customer_id,
+                "billing_mode": billing_mode,
+                "courtesy_until": courtesy_until,
+                "owner_email": owner_email
+            }),
+        )
+        .await;
+    }
+    info!(actor, tenant=%tenant_id, billing_mode=%billing_mode, "tenant provisionado");
+    Ok(PlatformTenantCreated {
         tenant_id,
         unit_id,
         name: name.into(),
@@ -1810,6 +1881,152 @@ async fn platform_create_tenant(
         owner_email,
         owner_password,
         owner_key,
+    })
+}
+
+/// Autoatendimento público: cria a loja, o owner e a assinatura, e já tenta
+/// gerar a cobrança do primeiro mês. A conta nasce em teste até o pagamento.
+async fn public_signup(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<SignupRequest>,
+) -> Result<Json<SignupCreated>, ApiError> {
+    let ip = client_ip(&headers, addr);
+    let recent = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::bigint FROM login_attempts WHERE ip=$1 AND email='self-signup' AND attempted_at>now()-interval '1 hour'",
+    )
+    .bind(&ip)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    if recent >= 10 {
+        return Err(error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "muitos cadastros deste endereço; tente novamente em 1 hora",
+        ));
+    }
+    let _ =
+        sqlx::query("INSERT INTO login_attempts(email,ip,succeeded) VALUES('self-signup',$1,true)")
+            .bind(&ip)
+            .execute(&state.db)
+            .await;
+
+    let name = request.name.trim();
+    let unit_name = request.unit_name.trim();
+    let email = request.email.trim().to_lowercase();
+    let valid_email = email.len() <= 200
+        && email.split_once('@').is_some_and(|(user, domain)| {
+            !user.is_empty() && domain.contains('.') && !domain.starts_with('.')
+        });
+    if name.len() < 2
+        || name.len() > 120
+        || unit_name.len() < 2
+        || unit_name.len() > 120
+        || !valid_email
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "dados do cadastro inválidos",
+        ));
+    }
+    let billing_type = request
+        .billing_type
+        .as_deref()
+        .unwrap_or("PIX")
+        .trim()
+        .to_uppercase();
+    if !matches!(billing_type.as_str(), "PIX" | "CREDIT_CARD" | "BOLETO") {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "forma de pagamento inválida",
+        ));
+    }
+    if let Some(logo) = request.logo_data_url.as_deref() {
+        if !logo.starts_with("data:image/") || logo.len() > 2_800_000 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "logo inválida ou maior que 2 MB",
+            ));
+        }
+    }
+    let plan_price = sqlx::query_scalar::<_, i32>(
+        "SELECT monthly_brl_cents FROM platform_plan_catalog WHERE code=$1 AND active=true",
+    )
+    .bind(&request.plan)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::BAD_REQUEST, "plano inválido"))?;
+
+    let trial_days = env::var("SIGNUP_TRIAL_DAYS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(7)
+        .clamp(0, 30);
+    let create = PlatformTenantCreateRequest {
+        name: name.to_string(),
+        unit_name: unit_name.to_string(),
+        email: Some(email),
+        cnpj_cpf: request
+            .cnpj_cpf
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        phone: request
+            .phone
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        plan: request.plan.clone(),
+        trial_days,
+        create_asaas_customer: Some(true),
+        billing_mode: Some("paid".into()),
+        courtesy_months: None,
+        courtesy_until: None,
+        courtesy_note: None,
+    };
+    let branding = SignupBranding {
+        logo_data_url: request.logo_data_url.clone(),
+        primary_color: request.primary_color.clone(),
+    };
+    let created = provision_tenant(&state, None, &create, Some(&branding)).await?;
+
+    let mut payment = None;
+    let mut payment_error = None;
+    if plan_price > 0 {
+        if created.asaas_customer_id.is_some() {
+            let payment_request = TenantSubscriptionPaymentRequest {
+                amount_brl_cents: plan_price as i64,
+                billing_type,
+                description: Some(format!(
+                    "Assinatura CommerceCTRL - {} ({})",
+                    name, request.plan
+                )),
+                validity_days: Some(3),
+            };
+            match create_subscription_payment(&state, created.tenant_id, &payment_request).await {
+                Ok(value) => payment = Some(value),
+                Err((_, Json(body))) => {
+                    warn!(tenant=%created.tenant_id, error=%body, "cobrança do autoatendimento falhou");
+                    payment_error = body
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                }
+            }
+        } else {
+            payment_error =
+                Some("Pagamento indisponível no momento; sua conta está em teste.".into());
+        }
+    }
+    info!(tenant=%created.tenant_id, plan=%create.plan, "tenant criado por autoatendimento");
+    Ok(Json(SignupCreated {
+        tenant: created,
+        payment,
+        payment_error,
     }))
 }
 
@@ -1916,6 +2133,16 @@ async fn platform_create_subscription_payment(
     Path(tenant_id): Path<Uuid>,
     Json(request): Json<TenantSubscriptionPaymentRequest>,
 ) -> Result<Json<TenantPaymentIntentOut>, ApiError> {
+    Ok(Json(
+        create_subscription_payment(&state, tenant_id, &request).await?,
+    ))
+}
+
+async fn create_subscription_payment(
+    state: &Arc<AppState>,
+    tenant_id: Uuid,
+    request: &TenantSubscriptionPaymentRequest,
+) -> Result<TenantPaymentIntentOut, ApiError> {
     let row = sqlx::query_as::<_, (Uuid, Option<String>)>(
         "SELECT tenant_id, asaas_customer_id FROM tenant_subscriptions WHERE tenant_id=$1",
     )
@@ -1946,7 +2173,7 @@ async fn platform_create_subscription_payment(
         if existing.status == "received" || existing.status == "confirmed" {
             return Err(error(StatusCode::CONFLICT, "payment already approved"));
         }
-        return Ok(Json(TenantPaymentIntentOut {
+        return Ok(TenantPaymentIntentOut {
             id: existing.id,
             external_reference: existing.external_reference,
             amount_brl_cents: existing.amount_brl_cents,
@@ -1954,7 +2181,7 @@ async fn platform_create_subscription_payment(
             qr_payload: existing.qr_payload,
             expires_at: existing.expires_at,
             checkout_url: None,
-        }));
+        });
     }
 
     let api_key = env::var("ASAAS_API_KEY").unwrap_or_default();
@@ -1996,7 +2223,7 @@ async fn platform_create_subscription_payment(
             "billingType": request.billing_type,
             "value": request.amount_brl_cents as f64 / 100.0,
             "dueDate": expires_at.date_naive().format("%Y-%m-%d").to_string(),
-            "description": request.description.unwrap_or_else(|| format!("Assinatura CommerceCTRL - {}", row.1.clone().unwrap_or_default())),
+            "description": request.description.clone().unwrap_or_else(|| format!("Assinatura CommerceCTRL - {}", row.1.clone().unwrap_or_default())),
             "externalReference": &external_reference,
         }))
         .send()
@@ -2063,7 +2290,7 @@ async fn platform_create_subscription_payment(
     .await
     .map_err(internal)?;
 
-    Ok(Json(TenantPaymentIntentOut {
+    Ok(TenantPaymentIntentOut {
         id: result.id,
         external_reference: result.external_reference,
         amount_brl_cents: result.amount_brl_cents,
@@ -2071,7 +2298,7 @@ async fn platform_create_subscription_payment(
         qr_payload: result.qr_payload,
         expires_at: result.expires_at,
         checkout_url: None,
-    }))
+    })
 }
 
 async fn platform_payment_status(
@@ -3643,6 +3870,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(platform_revoke_activation_code),
         )
         .route("/api/v1/activation/claim", post(claim_activation_code))
+        .route("/api/v1/signup", post(public_signup))
         .route("/api/v1/sync/outbox", post(ingest_event))
         .route("/api/v1/sync/products", get(products))
         .route("/api/v1/sync/users", get(sync_users))
