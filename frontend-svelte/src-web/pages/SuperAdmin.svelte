@@ -434,7 +434,10 @@
   async function switchTab(next: Tab) {
     tab = next;
     if (next === "overview") await loadOverview();
-    if (next === "clients") await refresh();
+    if (next === "clients") {
+      await refresh();
+      if (selectedId) await loadTenant();
+    }
     if (next === "billing") await loadOverview();
     if (next === "audit") await loadAudit(true);
     if (next === "leads") await loadLeads();
@@ -452,6 +455,7 @@
       password = "";
       authenticated = true;
       await Promise.all([refresh(), loadOverview()]);
+      if (selectedId) await loadTenant();
     } catch (cause) {
       fail(cause, "Credenciais inválidas.");
     } finally {
@@ -876,6 +880,7 @@
       await request("/me");
       authenticated = true;
       await Promise.all([refresh(), loadOverview()]);
+      if (selectedId) await loadTenant();
     } catch {
       authenticated = false;
     }
