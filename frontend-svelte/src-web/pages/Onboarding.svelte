@@ -2,6 +2,7 @@
   import { Building2, CheckCircle2, ChevronLeft, ChevronRight, ImageUp, MapPin, PackagePlus, ShieldCheck, QrCode, Smartphone, Link2 } from "@lucide/svelte";
   import { signupTenant } from "../lib/tauri.web";
   import type { TenantPaymentIntentOut } from "../lib/tauri.web";
+  import { DESKTOP_DOWNLOAD_URL } from "../lib/desktop-release";
   let { onDone }: { onDone: () => void } = $props();
   let step=$state(0), saving=$state(false), message=$state(""), plan=$state("starter");
   let storeName=$state(""), legalName=$state(""), cnpj=$state(""), ie=$state(""), email=$state(""), phone=$state(""), address=$state(""), unitName=$state("Matriz"), logo=$state("");
@@ -23,7 +24,7 @@
     {id:"credit_card",name:"Cartão de crédito",detail:"Parcelado em até 12x",icon:"<rect width=\"18\" height=\"12\" x=\"3\" y=\"6\" rx=\"2\" ry=\"2\" stroke=\"#3b82f6\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\" stroke=\"#3b82f6\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><circle cx=\"12\" cy=\"6\" r=\"1\" fill=\"#3b82f6\"/>"},
     {id:"boleto",name:"Boleto bancário",detail:"Vencimento em até 7 dias",icon:"<rect width=\"18\" height=\"12\" x=\"3\" y=\"6\" rx=\"2\" ry=\"2\" stroke=\"#f59e0b\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/><path d=\"M7 10h4M14 10h4M7 14h4M14 14h4\" stroke=\"#f59e0b\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/><line x1=\"10\" y1=\"6\" x2=\"10\" y2=\"18\" stroke=\"#f59e0b\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>"}
   ];
-  const desktopDownloadUrl = import.meta.env.VITE_DESKTOP_DOWNLOAD_URL as string | undefined;
+  const desktopDownloadUrl = DESKTOP_DOWNLOAD_URL;
   async function chooseLogo(event:Event){const file=(event.currentTarget as HTMLInputElement).files?.[0];if(!file)return;const bitmap=await createImageBitmap(file);const scale=Math.min(1,512/Math.max(bitmap.width,bitmap.height));const canvas=document.createElement("canvas");canvas.width=Math.round(bitmap.width*scale);canvas.height=Math.round(bitmap.height*scale);canvas.getContext("2d")?.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();logo=canvas.toDataURL("image/webp",.84)}
   async function finish(){saving=true;message="";paymentError="";try{
     const created=await signupTenant({

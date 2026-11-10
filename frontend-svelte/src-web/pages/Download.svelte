@@ -1,8 +1,9 @@
 <script lang="ts">
   import { CheckCircle2, Download, MonitorDown, ShieldCheck, WifiOff } from "@lucide/svelte";
+  import { DESKTOP_DOWNLOAD_URL } from "../lib/desktop-release";
 
   let { onBack }: { onBack: () => void } = $props();
-  const installerUrl = (import.meta.env.VITE_DESKTOP_DOWNLOAD_URL as string | undefined)?.trim();
+  const installerUrl = DESKTOP_DOWNLOAD_URL;
   const available = Boolean(installerUrl);
 </script>
 
