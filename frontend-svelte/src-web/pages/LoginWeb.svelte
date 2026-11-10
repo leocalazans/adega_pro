@@ -3,13 +3,16 @@
   import { ShieldCheck, Globe } from "@lucide/svelte";
   import UserIcon from "../../src-shared/UserIcon.svelte";
   import PassIcon from "../../src-shared/PassIcon.svelte";
-  import { tenantLogin, tenantMe, cloudOwnerBranding } from "../lib/tauri.web";
+  import { tenantLogin, tenantMe, tenantChangePassword, cloudOwnerBranding, TenantLoginAmbiguousError } from "../lib/tauri.web";
+  import type { TenantChoice } from "../lib/tauri.web";
   import type { UserSession } from "../../src-shared/types";
 
   let { onLogin, storeName = "CommerceCTRL" }: { onLogin: (session: UserSession) => void; storeName?: string } = $props();
 
   let email = $state("");
   let password = $state("");
+  let slug = $state("");
+  let choices = $state<TenantChoice[]>([]);
   let newPassword = $state("");
   let confirmation = $state("");
   let current = $state("");
@@ -34,14 +37,20 @@
     } catch {}
     const existing = await tenantMe().catch(() => null);
     if (existing) {
-      onLogin({
+      session = {
         user_id: 0,
         employee_id: null,
-        display_name: existing.email,
+        display_name: existing.display_name || existing.email,
         username: existing.email,
         role: existing.role,
         permissions: ["*"],
-      });
+      };
+      if (existing.must_change_password) {
+        email = existing.email;
+        firstAccess = true;
+        return;
+      }
+      onLogin(session);
     }
   });
 
@@ -49,17 +58,28 @@
     busy = true;
     error = "";
     try {
-      const result = await tenantLogin(email, password);
-      onLogin({
+      const result = await tenantLogin(email, password, slug || null);
+      choices = [];
+      session = {
         user_id: 0,
         employee_id: null,
-        display_name: result.email,
+        display_name: result.display_name || result.email,
         username: result.email,
         role: result.role,
         permissions: ["*"],
-      });
+      };
+      if (result.must_change_password) {
+        firstAccess = true;
+        return;
+      }
+      onLogin(session);
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : "Não foi possível entrar. Verifique suas credenciais.";
+      if (cause instanceof TenantLoginAmbiguousError) {
+        choices = cause.tenants;
+        error = "Seu e-mail está em mais de uma loja. Escolha a loja para continuar.";
+      } else {
+        error = cause instanceof Error ? cause.message : "Não foi possível entrar. Verifique suas credenciais.";
+      }
     } finally {
       busy = false;
     }
@@ -73,7 +93,7 @@
     busy = true;
     error = "";
     try {
-      // Primeira troca de senha via tenantLogin já autenticado
+      await tenantChangePassword(password, newPassword);
       if (session) onLogin(session);
     } catch (cause) {
       error = cause instanceof Error ? cause.message : "Não foi possível alterar a senha.";
@@ -143,6 +163,17 @@
           Senha
           <div class="input-wrap"><PassIcon size={18} /><input type="password" autocomplete="current-password" required bind:value={password} /></div>
         </label>
+        {#if choices.length}
+          <label>
+            Loja
+            <select bind:value={slug} required>
+              <option value="">Selecione a loja</option>
+              {#each choices as choice}
+                <option value={choice.slug}>{choice.name} ({choice.slug})</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
         {#if error}<p class="error" role="alert">{error}</p>{/if}
         <button disabled={busy}>
           {busy ? "Verificando acesso…" : "Acessar painel"}

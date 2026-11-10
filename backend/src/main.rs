@@ -72,6 +72,9 @@ struct PlatformLoginRequest {
 struct TenantLoginRequest {
     email: String,
     password: String,
+    /// Obrigatório apenas quando o mesmo e-mail existe em mais de uma loja.
+    #[serde(default)]
+    slug: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -82,6 +85,14 @@ struct TenantUserRecord {
     email: String,
     password_hash: String,
     role: String,
+    display_name: Option<String>,
+    must_change_password: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct TenantPasswordRequest {
+    current_password: String,
+    new_password: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -95,9 +106,14 @@ struct PlatformAdminRecord {
 struct PlatformTenantOut {
     id: Uuid,
     name: String,
+    slug: Option<String>,
     units: i64,
     terminals: i64,
     online_terminals: i64,
+    subscription_status: Option<String>,
+    billing_mode: Option<String>,
+    courtesy_until: Option<chrono::DateTime<chrono::Utc>>,
+    current_period_ends_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,14 +128,25 @@ struct PlatformTenantCreateRequest {
     #[serde(default)]
     trial_days: i64,
     create_asaas_customer: Option<bool>,
+    #[serde(default)]
+    billing_mode: Option<String>,
+    courtesy_months: Option<i64>,
+    courtesy_until: Option<chrono::DateTime<chrono::Utc>>,
+    courtesy_note: Option<String>,
 }
 #[derive(Debug, Serialize)]
 struct PlatformTenantCreated {
     tenant_id: Uuid,
     unit_id: Uuid,
     name: String,
+    slug: String,
     trial_ends_at: chrono::DateTime<chrono::Utc>,
     asaas_customer_id: Option<String>,
+    billing_mode: String,
+    courtesy_until: Option<chrono::DateTime<chrono::Utc>>,
+    owner_email: String,
+    owner_password: String,
+    owner_key: String,
 }
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct CommercialPlanOut {
@@ -191,8 +218,11 @@ struct ActivationClaimRequest {
 struct ActivationClaimed {
     tenant_id: Uuid,
     unit_id: Uuid,
+    tenant_slug: String,
+    tenant_name: String,
     terminal_id: Uuid,
     terminal_key: String,
+    owner_key: String,
     license: SignedLicense,
 }
 fn default_plan() -> String {
@@ -474,6 +504,7 @@ fn asaas_status(value: &str) -> &'static str {
     match value {
         "RECEIVED" | "CONFIRMED" => "received",
         "REFUNDED" | "REFUND_REQUESTED" => "refunded",
+        "CHARGEBACK" | "CHARGEBACK_REQUESTED" | "CHARGEBACK_DISPUTE" => "chargeback",
         "OVERDUE" => "overdue",
         "DELETED" => "cancelled",
         _ => "pending",
@@ -601,8 +632,70 @@ async fn asaas_webhook(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("");
-    sqlx::query("UPDATE payment_intents SET status=$2,raw=$3,updated_at=now() WHERE provider='asaas' AND provider_id=$1")
-        .bind(provider_id).bind(asaas_status(remote_status)).bind(serde_json::json!({"event":payload.event,"payment":payload.payment})).execute(&state.db).await.map_err(internal)?;
+    let normalized = asaas_status(remote_status);
+    sqlx::query("UPDATE payment_intents SET status=$2,raw=raw||$3,updated_at=now() WHERE provider='asaas' AND provider_id=$1")
+        .bind(provider_id)
+        .bind(normalized)
+        .bind(serde_json::json!({"event":payload.event,"payment":payload.payment}))
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+
+    let intent = sqlx::query_as::<_, (Uuid, Option<i32>)>(
+        "SELECT tenant_id, NULLIF(raw->>'validity_days','')::int FROM payment_intents WHERE provider='asaas' AND provider_id=$1",
+    )
+    .bind(provider_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?;
+    if let Some((tenant_id, validity_days)) = intent {
+        let days = validity_days.unwrap_or(30).clamp(1, 730);
+        match normalized {
+            "received" | "confirmed" => {
+                let ends_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                    "UPDATE tenant_subscriptions SET status='active',billing_mode='paid',courtesy_until=NULL,courtesy_note=NULL,trial_ends_at=NULL,current_period_ends_at=GREATEST(coalesce(current_period_ends_at,now()),now())+($2::text)::interval,updated_at=now() WHERE tenant_id=$1 RETURNING current_period_ends_at",
+                )
+                .bind(tenant_id)
+                .bind(format!("{days} days"))
+                .fetch_optional(&state.db)
+                .await
+                .map_err(internal)?;
+                if let Some(ends_at) = ends_at {
+                    let expires = ends_at.timestamp();
+                    sqlx::query("UPDATE licenses SET status='active',expires_at=$1,grace_until=$2,updated_at=now() WHERE tenant_id=$3")
+                        .bind(expires)
+                        .bind(expires + 7 * 86_400)
+                        .bind(tenant_id)
+                        .execute(&state.db)
+                        .await
+                        .map_err(internal)?;
+                }
+                info!(tenant=%tenant_id, days, "assinatura liberada pelo webhook Asaas");
+            }
+            "overdue" => {
+                sqlx::query("UPDATE tenant_subscriptions SET status='past_due',updated_at=now() WHERE tenant_id=$1 AND billing_mode='paid' AND status<>'cancelled'")
+                    .bind(tenant_id)
+                    .execute(&state.db)
+                    .await
+                    .map_err(internal)?;
+            }
+            "refunded" | "chargeback" => {
+                sqlx::query("UPDATE tenant_subscriptions SET status='suspended',updated_at=now() WHERE tenant_id=$1")
+                    .bind(tenant_id)
+                    .execute(&state.db)
+                    .await
+                    .map_err(internal)?;
+                sqlx::query(
+                    "UPDATE licenses SET status='suspended',updated_at=now() WHERE tenant_id=$1",
+                )
+                .bind(tenant_id)
+                .execute(&state.db)
+                .await
+                .map_err(internal)?;
+            }
+            _ => {}
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -722,14 +815,49 @@ async fn renew_license(
     if row.0 != "active" {
         return Err(error(StatusCode::PAYMENT_REQUIRED, "licença suspensa"));
     }
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now();
+    // Recalcula o prazo a partir da assinatura: cortesia estendida ou renovação
+    // chegam ao terminal no próximo pedido de licença.
+    let subscription = sqlx::query_as::<_, (Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT current_period_ends_at,trial_ends_at FROM tenant_subscriptions WHERE tenant_id=$1 AND status IN ('trial','active') AND (current_period_ends_at IS NULL OR current_period_ends_at>now())",
+    )
+    .bind(auth.tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?;
+    let subscription_until =
+        subscription.and_then(|(period, trial)| trial.filter(|value| *value > now).or(period));
+    let (expires_at, grace_until) = match subscription_until {
+        Some(until) => {
+            let expires = until.timestamp();
+            let grace = expires + 7 * 86_400;
+            if expires > row.1 || grace > row.2 {
+                sqlx::query("UPDATE licenses SET expires_at=$1,grace_until=$2,updated_at=now() WHERE tenant_id=$3 AND unit_id=$4 AND installation_id=$5")
+                    .bind(expires)
+                    .bind(grace)
+                    .bind(auth.tenant_id)
+                    .bind(auth.unit_id)
+                    .bind(request.installation_id.trim())
+                    .execute(&state.db)
+                    .await
+                    .map_err(internal)?;
+            }
+            (expires.max(row.1), grace.max(row.2))
+        }
+        None => {
+            if row.2 < now.timestamp() {
+                return Err(error(StatusCode::PAYMENT_REQUIRED, "assinatura vencida"));
+            }
+            (row.1, row.2)
+        }
+    };
     let claims = LicenseClaims {
         tenant_id: auth.tenant_id.to_string(),
         unit_id: auth.unit_id.to_string(),
         installation_id: request.installation_id,
-        issued_at: now,
-        expires_at: row.1,
-        grace_until: row.2,
+        issued_at: now.timestamp(),
+        expires_at,
+        grace_until,
         nonce: Uuid::new_v4().to_string(),
     };
     Ok(Json(sign_license(claims)?))
@@ -739,6 +867,58 @@ type ApiError = (StatusCode, Json<Value>);
 
 fn error(status: StatusCode, message: impl Into<String>) -> ApiError {
     (status, Json(serde_json::json!({ "error": message.into() })))
+}
+
+/// Transforma o nome da loja em um slug estável para login/disambiguacão.
+fn slugify(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len());
+    let mut last_dash = false;
+    for ch in name.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash && !slug.is_empty() {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = slug.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "loja".into()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
+fn random_secret(prefix: &str) -> String {
+    format!(
+        "{prefix}{}{}",
+        Uuid::new_v4().simple(),
+        &Uuid::new_v4().simple().to_string()[..12]
+    )
+}
+
+fn temporary_password() -> String {
+    // 23 caracteres, acima do mínimo de 12 exigido pelo bootstrap.
+    format!("Cc!{}", &Uuid::new_v4().simple().to_string()[..20])
+}
+
+async fn unique_slug(db: &PgPool, name: &str) -> Result<String, sqlx::Error> {
+    let base = slugify(name);
+    let mut candidate = base.clone();
+    let mut attempt = 1_i32;
+    loop {
+        let taken =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM tenants WHERE slug=$1)")
+                .bind(&candidate)
+                .fetch_one(db)
+                .await?;
+        if !taken {
+            return Ok(candidate);
+        }
+        attempt += 1;
+        candidate = format!("{base}-{attempt}");
+    }
 }
 
 fn header_uuid(headers: &HeaderMap, name: &'static str) -> Result<Uuid, ApiError> {
@@ -879,6 +1059,26 @@ impl FromRequestParts<Arc<AppState>> for TenantAuth {
         .await
         .map_err(internal)?
         .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão de usuário expirada"))?;
+        // Assinatura vencida/revogada: login permitido, mas somente leitura.
+        let writable = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM tenant_subscriptions WHERE tenant_id=$1 AND status IN ('trial','active') AND (current_period_ends_at IS NULL OR current_period_ends_at>now()))",
+        )
+        .bind(row.1)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal)?;
+        if !writable
+            && !parts.uri.path().starts_with("/api/v1/auth/")
+            && !matches!(
+                parts.method,
+                axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+            )
+        {
+            return Err(error(
+                StatusCode::PAYMENT_REQUIRED,
+                "assinatura vencida: acesso somente leitura",
+            ));
+        }
         let _ = sqlx::query("UPDATE tenant_sessions SET last_seen_at=now() WHERE token_hash=$1")
             .bind(hash_key(token))
             .execute(&state.db)
@@ -1028,14 +1228,47 @@ async fn tenant_login(
         let _ = record_login_attempt(&state, &email, &ip, false, None).await;
         return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
     }
-    let user = sqlx::query_as::<_, TenantUserRecord>(
-        "SELECT id,tenant_id,unit_id,email,password_hash,role FROM tenant_users WHERE email=$1 AND active=true",
+    let slug = request
+        .slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase);
+    let candidates = sqlx::query_as::<_, TenantUserRecord>(
+        "SELECT u.id,u.tenant_id,u.unit_id,u.email,u.password_hash,u.role,u.display_name,u.must_change_password FROM tenant_users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=$1 AND u.active=true AND u.revoked_at IS NULL AND ($2::text IS NULL OR t.slug=$2) ORDER BY u.created_at",
     )
     .bind(&email)
-    .fetch_optional(&state.db)
+    .bind(&slug)
+    .fetch_all(&state.db)
     .await
-    .map_err(internal)?
-    .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "credenciais inválidas"))?;
+    .map_err(internal)?;
+
+    if candidates.is_empty() {
+        let _ = record_login_attempt(&state, &email, &ip, false, None).await;
+        return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
+    }
+    if candidates.len() > 1 {
+        // O mesmo e-mail existe em lojas diferentes: o cliente precisa informar o slug.
+        let tenants = sqlx::query_as::<_, (String, String)>(
+            "SELECT t.slug,t.name FROM tenant_users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=$1 AND u.active=true AND u.revoked_at IS NULL ORDER BY t.name",
+        )
+        .bind(&email)
+        .fetch_all(&state.db)
+        .await
+        .map_err(internal)?;
+        let options: Vec<Value> = tenants
+            .into_iter()
+            .map(|(slug, name)| serde_json::json!({"slug": slug, "name": name}))
+            .collect();
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "e-mail cadastrado em mais de uma loja; informe o slug",
+                "tenants": options
+            })),
+        ));
+    }
+    let user = candidates.into_iter().next().expect("candidato único");
     let tenant_id = Some(user.tenant_id);
 
     let failures = count_recent_failed_attempts(&state, &email, &ip).await?;
@@ -1078,6 +1311,11 @@ async fn tenant_login(
         .execute(&state.db)
         .await
         .map_err(internal)?;
+    let tenant_slug = sqlx::query_scalar::<_, String>("SELECT slug FROM tenants WHERE id=$1")
+        .bind(user.tenant_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal)?;
     let mut headers = HeaderMap::new();
     headers.insert(header::SET_COOKIE, tenant_session_cookie(&token)?);
     Ok((
@@ -1086,9 +1324,63 @@ async fn tenant_login(
             "email": user.email,
             "role": user.role,
             "tenant_id": user.tenant_id,
+            "tenant_slug": tenant_slug,
             "unit_id": user.unit_id,
+            "display_name": user.display_name,
+            "must_change_password": user.must_change_password,
         })),
     ))
+}
+
+async fn tenant_change_password(
+    State(state): State<Arc<AppState>>,
+    auth: TenantAuth,
+    Json(request): Json<TenantPasswordRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if request.new_password.len() < 8 || request.new_password.len() > 128 {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "a nova senha deve ter entre 8 e 128 caracteres",
+        ));
+    }
+    let stored = sqlx::query_as::<_, (String, bool)>(
+        "SELECT password_hash,must_change_password FROM tenant_users WHERE id=$1 AND active=true",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão de usuário expirada"))?;
+    if !stored.1 {
+        // Troca voluntária exige a senha atual; no primeiro acesso a própria
+        // sessão autenticada basta (inclusive após recarregar a página).
+        let parsed = PasswordHash::new(&stored.0).map_err(|_| {
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "credencial de usuário inválida",
+            )
+        })?;
+        let ok = Argon2::default()
+            .verify_password(request.current_password.as_bytes(), &parsed)
+            .is_ok();
+        if !ok {
+            return Err(error(StatusCode::UNAUTHORIZED, "senha atual incorreta"));
+        }
+    }
+    let new_hash = password_hash(&request.new_password)?;
+    sqlx::query("UPDATE tenant_users SET password_hash=$1,must_change_password=false,updated_at=now() WHERE id=$2")
+        .bind(new_hash)
+        .bind(auth.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    // Encerra as demais sessões deste usuário; a sessão atual continua válida.
+    sqlx::query("DELETE FROM tenant_sessions WHERE user_id=$1")
+        .bind(auth.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    Ok(Json(serde_json::json!({"ok": true})))
 }
 
 async fn tenant_logout(
@@ -1108,12 +1400,26 @@ async fn tenant_logout(
     Ok((response_headers, Json(serde_json::json!({"ok":true}))))
 }
 
-async fn tenant_me(auth: TenantAuth) -> Json<Value> {
-    Json(serde_json::json!({
+async fn tenant_me(
+    State(state): State<Arc<AppState>>,
+    auth: TenantAuth,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query_as::<_, (Option<String>, bool, Option<String>)>(
+        "SELECT u.display_name,u.must_change_password,t.slug FROM tenant_users u JOIN tenants t ON t.id=u.tenant_id WHERE u.id=$1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão de usuário expirada"))?;
+    Ok(Json(serde_json::json!({
         "email": auth.email,
         "role": auth.role,
         "tenant_id": auth.tenant_id,
-    }))
+        "tenant_slug": row.2,
+        "display_name": row.0,
+        "must_change_password": row.1,
+    })))
 }
 
 async fn platform_tenants(
@@ -1121,7 +1427,7 @@ async fn platform_tenants(
     _auth: PlatformAuth,
 ) -> Result<Json<Vec<PlatformTenantOut>>, ApiError> {
     let tenants = sqlx::query_as::<_, PlatformTenantOut>(
-        "SELECT t.id,t.name,COUNT(DISTINCT u.id)::bigint AS units,COUNT(DISTINCT terminal.id)::bigint AS terminals,COUNT(DISTINCT terminal.id) FILTER (WHERE terminal.active AND terminal.last_seen_at>now()-interval '15 minutes')::bigint AS online_terminals FROM tenants t LEFT JOIN units u ON u.tenant_id=t.id LEFT JOIN terminals terminal ON terminal.tenant_id=t.id GROUP BY t.id,t.name ORDER BY t.created_at DESC",
+        "SELECT t.id,t.name,t.slug,COUNT(DISTINCT u.id)::bigint AS units,COUNT(DISTINCT terminal.id)::bigint AS terminals,COUNT(DISTINCT terminal.id) FILTER (WHERE terminal.active AND terminal.last_seen_at>now()-interval '15 minutes')::bigint AS online_terminals,s.status AS subscription_status,s.billing_mode,s.courtesy_until,s.current_period_ends_at FROM tenants t LEFT JOIN units u ON u.tenant_id=t.id LEFT JOIN terminals terminal ON terminal.tenant_id=t.id LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id GROUP BY t.id,t.name,t.slug,s.status,s.billing_mode,s.courtesy_until,s.current_period_ends_at ORDER BY t.created_at DESC",
     )
     .fetch_all(&state.db)
     .await
@@ -1142,9 +1448,36 @@ async fn platform_tenant_detail(
     .await
     .map_err(internal)?
     .ok_or_else(|| error(StatusCode::NOT_FOUND, "unidade não encontrada"))?;
-    Ok(Json(
-        serde_json::json!({"tenant_id":tenant_id,"unit_id":unit_id}),
-    ))
+    let detail = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
+        ),
+    >(
+        "SELECT t.name,t.slug,s.status,s.billing_mode,s.courtesy_until,s.current_period_ends_at,(SELECT u.email FROM tenant_users u WHERE u.tenant_id=t.id AND u.role='owner' ORDER BY u.created_at LIMIT 1) FROM tenants t LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id WHERE t.id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "tenant não encontrado"))?;
+    Ok(Json(serde_json::json!({
+        "tenant_id": tenant_id,
+        "unit_id": unit_id,
+        "name": detail.0,
+        "slug": detail.1,
+        "subscription_status": detail.2,
+        "billing_mode": detail.3,
+        "courtesy_until": detail.4,
+        "current_period_ends_at": detail.5,
+        "owner_email": detail.6,
+    })))
 }
 
 async fn commercial_lead(
@@ -1236,6 +1569,12 @@ async fn platform_create_tenant(
 ) -> Result<Json<PlatformTenantCreated>, ApiError> {
     let name = request.name.trim();
     let unit_name = request.unit_name.trim();
+    let billing_mode = request
+        .billing_mode
+        .as_deref()
+        .unwrap_or("paid")
+        .trim()
+        .to_lowercase();
     if name.len() < 2
         || name.len() > 120
         || unit_name.len() < 2
@@ -1245,14 +1584,62 @@ async fn platform_create_tenant(
             "starter" | "fiscal" | "premium" | "essencial" | "profissional" | "rede"
         )
         || !(0..=365).contains(&request.trial_days)
+        || !matches!(billing_mode.as_str(), "paid" | "courtesy")
     {
         return Err(error(StatusCode::BAD_REQUEST, "dados do tenant inválidos"));
     }
+
+    let now = chrono::Utc::now();
+    let max_courtesy = now + chrono::Duration::days(730);
+    let courtesy_until = if billing_mode == "courtesy" {
+        let until = match request.courtesy_until {
+            Some(value) => value,
+            None => {
+                let months = request.courtesy_months.unwrap_or(1);
+                if !(1..=24).contains(&months) {
+                    return Err(error(
+                        StatusCode::BAD_REQUEST,
+                        "período de cortesia deve ter entre 1 e 24 meses",
+                    ));
+                }
+                now + chrono::Duration::days(months * 30)
+            }
+        };
+        if until <= now || until > max_courtesy {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "a cortesia deve terminar entre hoje e 2 anos",
+            ));
+        }
+        Some(until)
+    } else {
+        None
+    };
+    let courtesy_note = request
+        .courtesy_note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(200).collect::<String>());
+
     let tenant_id = Uuid::new_v4();
     let unit_id = Uuid::new_v4();
-    let trial_ends_at = chrono::Utc::now() + chrono::Duration::days(request.trial_days);
+    let trial_ends_at = now + chrono::Duration::days(request.trial_days);
+    let period_ends_at = courtesy_until.unwrap_or(trial_ends_at);
+    let slug = unique_slug(&state.db, name).await.map_err(internal)?;
+    let owner_email = request
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase)
+        .unwrap_or_else(|| format!("dono@{slug}.commercectrl.local"));
+    let owner_password = temporary_password();
+    let owner_password_hash = password_hash(&owner_password)?;
+    let owner_key = random_secret("ok_");
+
     let mut asaas_customer_id: Option<String> = None;
-    if request.create_asaas_customer.unwrap_or(false) {
+    if billing_mode == "paid" && request.create_asaas_customer.unwrap_or(false) {
         match create_asaas_customer(
             &request.name,
             request.email.as_deref(),
@@ -1267,10 +1654,25 @@ async fn platform_create_tenant(
             }
         }
     }
+
+    let status = if billing_mode == "courtesy" {
+        "active"
+    } else if request.trial_days > 0 {
+        "trial"
+    } else {
+        "active"
+    };
+    let subscription_trial_ends_at = if billing_mode == "courtesy" {
+        None
+    } else {
+        Some(trial_ends_at)
+    };
+
     let mut tx = state.db.begin().await.map_err(internal)?;
-    sqlx::query("INSERT INTO tenants(id,name) VALUES($1,$2)")
+    sqlx::query("INSERT INTO tenants(id,name,slug) VALUES($1,$2,$3)")
         .bind(tenant_id)
         .bind(name)
+        .bind(&slug)
         .execute(&mut *tx)
         .await
         .map_err(internal)?;
@@ -1281,23 +1683,74 @@ async fn platform_create_tenant(
         .execute(&mut *tx)
         .await
         .map_err(internal)?;
-    sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at,asaas_customer_id) VALUES($1,$2,$3,$4,$4,$5)").bind(tenant_id).bind(&request.plan).bind(if request.trial_days>0{"trial"}else{"active"}).bind(trial_ends_at).bind(&asaas_customer_id).execute(&mut *tx).await.map_err(internal)?;
+    sqlx::query(
+        "INSERT INTO tenant_branding(tenant_id,display_name,primary_color) VALUES($1,$2,'#0D5C3A') ON CONFLICT(tenant_id) DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(name)
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?;
+    sqlx::query(
+        "INSERT INTO tenant_admins(tenant_id,email,role,api_key_hash) VALUES($1,$2,'owner',$3)",
+    )
+    .bind(tenant_id)
+    .bind(&owner_email)
+    .bind(hash_key(&owner_key))
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?;
+    sqlx::query("INSERT INTO tenant_users(tenant_id,email,password_hash,role,active,must_change_password,display_name,source) VALUES($1,$2,$3,'owner',true,true,$4,'cloud')")
+        .bind(tenant_id)
+        .bind(&owner_email)
+        .bind(&owner_password_hash)
+        .bind(format!("Administrador {name}"))
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+    sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at,asaas_customer_id,billing_mode,courtesy_until,courtesy_note) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+        .bind(tenant_id)
+        .bind(&request.plan)
+        .bind(status)
+        .bind(subscription_trial_ends_at)
+        .bind(period_ends_at)
+        .bind(&asaas_customer_id)
+        .bind(&billing_mode)
+        .bind(courtesy_until)
+        .bind(&courtesy_note)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
     platform_audit(
         &state.db,
         auth.admin_id,
         "tenant.created",
         Some(tenant_id),
-        serde_json::json!({"plan":request.plan,"trial_days":request.trial_days,"unit_id":unit_id,"asaas_customer_id":asaas_customer_id}),
+        serde_json::json!({
+            "plan": request.plan,
+            "trial_days": request.trial_days,
+            "unit_id": unit_id,
+            "asaas_customer_id": asaas_customer_id,
+            "billing_mode": billing_mode,
+            "courtesy_until": courtesy_until,
+            "owner_email": owner_email
+        }),
     )
     .await;
-    info!(admin=%auth.email,tenant=%tenant_id,"tenant provisionado pela plataforma");
+    info!(admin=%auth.email,tenant=%tenant_id,billing_mode=%billing_mode,"tenant provisionado pela plataforma");
     Ok(Json(PlatformTenantCreated {
         tenant_id,
         unit_id,
         name: name.into(),
+        slug,
         trial_ends_at,
         asaas_customer_id,
+        billing_mode,
+        courtesy_until,
+        owner_email,
+        owner_password,
+        owner_key,
     }))
 }
 
@@ -1461,7 +1914,7 @@ async fn platform_create_subscription_payment(
     let expires_at = chrono::Utc::now() + chrono::Duration::days(validity_days);
 
     sqlx::query(
-        "INSERT INTO payment_intents(id,tenant_id,unit_id,terminal_id,provider,external_reference,amount_brl_cents,status,created_at) VALUES($1,$2,$3,$4,'asaas',$5,$6,'creating',now())",
+        "INSERT INTO payment_intents(id,tenant_id,unit_id,terminal_id,provider,external_reference,amount_brl_cents,status,raw,created_at) VALUES($1,$2,$3,$4,'asaas',$5,$6,'creating',$7,now())",
     )
     .bind(id)
     .bind(tenant_id)
@@ -1469,6 +1922,7 @@ async fn platform_create_subscription_payment(
     .bind(Uuid::nil())
     .bind(&external_reference)
     .bind(request.amount_brl_cents)
+    .bind(serde_json::json!({"validity_days": validity_days}))
     .execute(&state.db)
     .await
     .map_err(internal)?;
@@ -1687,6 +2141,130 @@ async fn platform_restore_tenant(
     ))
 }
 
+#[derive(Debug, Deserialize)]
+struct CourtesyRequest {
+    months: Option<i64>,
+    until: Option<chrono::DateTime<chrono::Utc>>,
+    note: Option<String>,
+    #[serde(default)]
+    revoke: bool,
+}
+
+/// Concede, estende ou revoga a cortesia de uma loja inteira.
+async fn platform_set_courtesy(
+    State(state): State<Arc<AppState>>,
+    auth: PlatformAuth,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<CourtesyRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1)")
+        .bind(tenant_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal)?;
+    if !exists {
+        return Err(error(StatusCode::NOT_FOUND, "tenant não encontrado"));
+    }
+    let note = request
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(200).collect::<String>());
+
+    if request.revoke {
+        sqlx::query("UPDATE tenant_subscriptions SET status='suspended',courtesy_until=now(),updated_at=now() WHERE tenant_id=$1")
+            .bind(tenant_id)
+            .execute(&state.db)
+            .await
+            .map_err(internal)?;
+        sqlx::query("UPDATE licenses SET status='suspended',updated_at=now() WHERE tenant_id=$1")
+            .bind(tenant_id)
+            .execute(&state.db)
+            .await
+            .map_err(internal)?;
+        platform_audit(
+            &state.db,
+            auth.admin_id,
+            "courtesy.revoked",
+            Some(tenant_id),
+            serde_json::json!({"note": note}),
+        )
+        .await;
+        info!(admin=%auth.email,tenant=%tenant_id,"cortesia revogada");
+        return Ok(Json(serde_json::json!({
+            "tenant_id": tenant_id,
+            "status": "suspended",
+            "billing_mode": "courtesy"
+        })));
+    }
+
+    let now = chrono::Utc::now();
+    let max_courtesy = now + chrono::Duration::days(730);
+    let until = match request.until {
+        Some(value) => value,
+        None => {
+            let months = request.months.unwrap_or(1);
+            if !(1..=24).contains(&months) {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "período de cortesia deve ter entre 1 e 24 meses",
+                ));
+            }
+            now + chrono::Duration::days(months * 30)
+        }
+    };
+    if until <= now || until > max_courtesy {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "a cortesia deve terminar entre hoje e 2 anos",
+        ));
+    }
+    let ends_at = until.timestamp();
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    let changed = sqlx::query(
+        "UPDATE tenant_subscriptions SET status='active',billing_mode='courtesy',trial_ends_at=NULL,current_period_ends_at=$2,courtesy_until=$2,courtesy_note=$3,updated_at=now() WHERE tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .bind(until)
+    .bind(&note)
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?
+    .rows_affected();
+    if changed == 0 {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            "assinatura do tenant não encontrada",
+        ));
+    }
+    sqlx::query(
+        "UPDATE licenses SET status='active',expires_at=$2,grace_until=$3,updated_at=now() WHERE tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .bind(ends_at)
+    .bind(ends_at + 7 * 86_400)
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
+    platform_audit(
+        &state.db,
+        auth.admin_id,
+        "courtesy.granted",
+        Some(tenant_id),
+        serde_json::json!({"until": until, "note": note}),
+    )
+    .await;
+    info!(admin=%auth.email,tenant=%tenant_id,until=%until,"cortesia concedida/estendida");
+    Ok(Json(serde_json::json!({
+        "tenant_id": tenant_id,
+        "status": "active",
+        "billing_mode": "courtesy",
+        "courtesy_until": until
+    })))
+}
+
 async fn platform_revoke_activation_code(
     State(state): State<Arc<AppState>>,
     auth: PlatformAuth,
@@ -1739,6 +2317,22 @@ async fn claim_activation_code(
     };
     let terminal_id = Uuid::new_v4();
     let terminal_key = format!("ct_{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let (tenant_slug, tenant_name) =
+        sqlx::query_as::<_, (String, String)>("SELECT slug,name FROM tenants WHERE id=$1")
+            .bind(row.0)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(internal)?;
+    let owner_key = random_secret("ok_");
+    sqlx::query(
+        "INSERT INTO tenant_admins(tenant_id,email,role,api_key_hash) VALUES($1,$2,'owner',$3) ON CONFLICT(tenant_id,email) DO UPDATE SET api_key_hash=excluded.api_key_hash,active=true",
+    )
+    .bind(row.0)
+    .bind(format!("terminal-{terminal_id}@terminal.local"))
+    .bind(hash_key(&owner_key))
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?;
     sqlx::query(
         "INSERT INTO terminals(id,tenant_id,unit_id,name,api_key_hash) VALUES($1,$2,$3,$4,$5)",
     )
@@ -1767,8 +2361,11 @@ async fn claim_activation_code(
     Ok(Json(ActivationClaimed {
         tenant_id: row.0,
         unit_id: row.1,
+        tenant_slug,
+        tenant_name,
         terminal_id,
         terminal_key,
+        owner_key,
         license: sign_license(LicenseClaims {
             tenant_id: row.0.to_string(),
             unit_id: row.1.to_string(),
@@ -1919,6 +2516,7 @@ async fn ingest_event(
             materialize_stock(&mut tx, &auth, event.uuid, event.created_at, payload).await?
         }
         "product" => materialize_product(&mut tx, &auth, payload).await?,
+        "user" => materialize_user(&mut tx, &auth, payload).await?,
         "employee" | "expense" | "supplier" | "customer" | "promotion" | "purchase_order"
         | "time_entry" | "cash_session" | "cash_movement" => {
             materialize_operational(&mut tx, &auth, &event.entity, payload).await?
@@ -1930,6 +2528,69 @@ async fn ingest_event(
         accepted: true,
         duplicate: false,
     }))
+}
+
+async fn materialize_user(
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &TerminalAuth,
+    payload: Value,
+) -> Result<(), ApiError> {
+    let email = payload
+        .get("email")
+        .or_else(|| payload.get("username"))
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| value.contains('@') && value.len() <= 160)
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "usuário sem e-mail válido"))?;
+    let password_hash = payload
+        .get("password_hash")
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("$argon2"))
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "usuário sem hash de senha"))?;
+    let display_name = payload
+        .get("display_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&email);
+    let role = match payload
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("cashier")
+    {
+        "owner" | "admin" => "owner",
+        "manager" => "manager",
+        "stock" => "stock",
+        "finance" => "finance",
+        "viewer" => "viewer",
+        _ => "cashier",
+    };
+    let active = payload
+        .get("active")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let must_change = payload
+        .get("must_change_password")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let unit_id = if role == "cashier" || role == "viewer" {
+        Some(auth.unit_id)
+    } else {
+        None
+    };
+    sqlx::query("INSERT INTO tenant_users(tenant_id,unit_id,email,password_hash,role,active,must_change_password,display_name,source,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'terminal',now()) ON CONFLICT(tenant_id,email) DO UPDATE SET password_hash=excluded.password_hash,unit_id=excluded.unit_id,role=excluded.role,active=excluded.active,must_change_password=excluded.must_change_password,display_name=excluded.display_name,source='terminal',updated_at=now()")
+        .bind(auth.tenant_id)
+        .bind(unit_id)
+        .bind(&email)
+        .bind(password_hash)
+        .bind(role)
+        .bind(active)
+        .bind(must_change)
+        .bind(display_name)
+        .execute(&mut **tx)
+        .await
+        .map_err(internal)?;
+    Ok(())
 }
 
 async fn materialize_product(
@@ -2056,6 +2717,34 @@ async fn materialize_stock(
     sqlx::query("INSERT INTO stock_movements (tenant_id,unit_id,event_uuid,ean,delta,reason,client_created_at) VALUES ($1,$2,$3,$4,$5,'adjustment',$6) ON CONFLICT DO NOTHING")
         .bind(auth.tenant_id).bind(auth.unit_id).bind(event_uuid).bind(movement.ean).bind(movement.delta).bind(created_at).execute(&mut **tx).await.map_err(internal)?;
     Ok(())
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct SyncUserOut {
+    id: Uuid,
+    email: String,
+    display_name: Option<String>,
+    role: String,
+    password_hash: String,
+    must_change_password: bool,
+    active: bool,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Usuários que o terminal deve espelhar localmente para login offline.
+async fn sync_users(
+    State(state): State<Arc<AppState>>,
+    auth: TerminalAuth,
+) -> Result<Json<Vec<SyncUserOut>>, ApiError> {
+    let rows = sqlx::query_as::<_, SyncUserOut>(
+        "SELECT id,email,display_name,role,password_hash,must_change_password,active,updated_at FROM tenant_users WHERE tenant_id=$1 AND (unit_id IS NULL OR unit_id=$2) ORDER BY email",
+    )
+    .bind(auth.tenant_id)
+    .bind(auth.unit_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(rows))
 }
 
 async fn products(
@@ -2303,12 +2992,23 @@ async fn owner_branding(
     .bind(auth.tenant_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(internal)?
-    .unwrap_or(TenantBranding {
-        display_name: "Mercadinho Martins".into(),
-        logo_data_url: None,
-        primary_color: Some("#0D5C3A".into()),
-    });
+    .map_err(internal)?;
+    let branding = match branding {
+        Some(value) => value,
+        None => {
+            let name = sqlx::query_scalar::<_, String>("SELECT name FROM tenants WHERE id=$1")
+                .bind(auth.tenant_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(internal)?
+                .unwrap_or_else(|| "CommerceCTRL".into());
+            TenantBranding {
+                display_name: name,
+                logo_data_url: None,
+                primary_color: Some("#0D5C3A".into()),
+            }
+        }
+    };
     Ok(Json(branding))
 }
 
@@ -2405,7 +3105,38 @@ async fn sales_by_unit(
     Ok(Json(rows))
 }
 
+/// Compatibilidade de schema: enquanto as migrations rodam manualmente no
+/// Supabase, aplica a 0018 na inicialização caso as colunas ainda não existam.
+/// É idempotente (IF NOT EXISTS) e não falha o boot se o banco estiver incompleto.
+async fn ensure_identity_schema(pool: &PgPool) {
+    let ready = sqlx::query_scalar::<_, bool>(
+        "SELECT
+            (SELECT count(*) FROM information_schema.columns WHERE table_name='tenants' AND column_name='slug') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_subscriptions' AND column_name='billing_mode') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_subscriptions' AND column_name='courtesy_until') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_subscriptions' AND column_name='courtesy_note') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_users' AND column_name='display_name') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_users' AND column_name='source') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_users' AND column_name='revoked_at') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_users' AND column_name='updated_at') > 0",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if ready {
+        return;
+    }
+    warn!("schema de identidade/cortesia ausente; aplicando 0018 na inicialização");
+    if let Err(error) = sqlx::raw_sql(include_str!("../migrations/0018_courtesy_identity.sql"))
+        .execute(pool)
+        .await
+    {
+        warn!("não foi possível aplicar 0018 automaticamente: {error}. Aplique manualmente no Supabase.");
+    }
+}
+
 async fn bootstrap(pool: &PgPool) -> Result<(), sqlx::Error> {
+    ensure_identity_schema(pool).await;
     if let (Ok(email), Ok(password)) = (
         env::var("SUPERADMIN_EMAIL"),
         env::var("SUPERADMIN_PASSWORD"),
@@ -2436,7 +3167,14 @@ async fn bootstrap(pool: &PgPool) -> Result<(), sqlx::Error> {
     let owner_key =
         env::var("BOOTSTRAP_OWNER_KEY").unwrap_or_else(|_| "commercectrl-owner-dev-key".into());
     let mut tx = pool.begin().await?;
-    sqlx::query("INSERT INTO tenants(id,name) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET name=excluded.name").bind(tenant_id).bind(env::var("BOOTSTRAP_TENANT_NAME").unwrap_or_else(|_| "Mercadinho Martins".into())).execute(&mut *tx).await?;
+    let tenant_name =
+        env::var("BOOTSTRAP_TENANT_NAME").unwrap_or_else(|_| "Mercadinho Martins".into());
+    sqlx::query("INSERT INTO tenants(id,name,slug) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET name=excluded.name,slug=COALESCE(tenants.slug,excluded.slug)")
+        .bind(tenant_id)
+        .bind(&tenant_name)
+        .bind(slugify(&tenant_name))
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at) VALUES($1,'profissional','trial',now()+interval '3 months',now()+interval '3 months') ON CONFLICT(tenant_id) DO NOTHING")
         .bind(tenant_id)
         .execute(&mut *tx)
@@ -2574,6 +3312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/auth/login", post(tenant_login))
         .route("/api/v1/auth/logout", post(tenant_logout))
         .route("/api/v1/auth/me", get(tenant_me))
+        .route("/api/v1/auth/password", post(tenant_change_password))
         .route("/api/v1/commercial/leads", post(commercial_lead))
         .route(
             "/api/v1/platform/commercial/catalog",
@@ -2614,12 +3353,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(platform_restore_tenant),
         )
         .route(
+            "/api/v1/platform/tenants/{tenant_id}/courtesy",
+            post(platform_set_courtesy),
+        )
+        .route(
             "/api/v1/platform/activation-codes/{code_id}/revoke",
             post(platform_revoke_activation_code),
         )
         .route("/api/v1/activation/claim", post(claim_activation_code))
         .route("/api/v1/sync/outbox", post(ingest_event))
         .route("/api/v1/sync/products", get(products))
+        .route("/api/v1/sync/users", get(sync_users))
         .route(
             "/api/v1/updates/{target}/{arch}/{version}",
             get(desktop_update),
@@ -2662,11 +3406,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = bind_addr.parse()?;
     info!(%addr, "CommerceCTRL backend iniciado");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
     Ok(())
 }
 

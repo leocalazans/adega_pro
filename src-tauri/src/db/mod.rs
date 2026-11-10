@@ -91,6 +91,8 @@ pub struct AuthUser {
     pub role: String,
     pub password_hash: Option<String>,
     pub must_change_password: bool,
+    pub cloud_user_id: Option<String>,
+    pub cloud_email: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -553,6 +555,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         WHERE NOT EXISTS(SELECT 1 FROM app_users);",
     ),
     ("13", "ALTER TABLE products ADD COLUMN image_url TEXT;"),
+    (
+        "14",
+        "ALTER TABLE app_users ADD COLUMN cloud_user_id TEXT;
+        ALTER TABLE app_users ADD COLUMN cloud_email TEXT;
+        ALTER TABLE app_users ADD COLUMN password_updated_at INTEGER;
+        CREATE INDEX IF NOT EXISTS idx_app_users_cloud_user ON app_users(cloud_user_id);
+        CREATE INDEX IF NOT EXISTS idx_app_users_cloud_email ON app_users(cloud_email COLLATE NOCASE);",
+    ),
 ];
 
 impl Db {
@@ -670,9 +680,18 @@ impl Db {
     pub fn auth_user(&self, username: &str) -> rusqlite::Result<Option<AuthUser>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id,employee_id,display_name,username,role,password_hash,must_change_password FROM app_users WHERE username=?1 COLLATE NOCASE AND active=1",
-            [username.trim()], |row| Ok(AuthUser { id:row.get(0)?, employee_id:row.get(1)?, display_name:row.get(2)?, username:row.get(3)?, role:row.get(4)?, password_hash:row.get(5)?, must_change_password:row.get::<_,i64>(6)? != 0 })
+            "SELECT id,employee_id,display_name,username,role,password_hash,must_change_password,cloud_user_id,cloud_email FROM app_users WHERE (username=?1 COLLATE NOCASE OR cloud_email=?1 COLLATE NOCASE) AND active=1 ORDER BY CASE WHEN username=?1 COLLATE NOCASE THEN 0 ELSE 1 END LIMIT 1",
+            [username.trim()], |row| Ok(AuthUser { id:row.get(0)?, employee_id:row.get(1)?, display_name:row.get(2)?, username:row.get(3)?, role:row.get(4)?, password_hash:row.get(5)?, must_change_password:row.get::<_,i64>(6)? != 0, cloud_user_id:row.get(7)?, cloud_email:row.get(8)? })
         ).optional()
+    }
+
+    pub fn has_cloud_users(&self) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_users WHERE cloud_user_id IS NOT NULL AND active=1)",
+            [],
+            |row| row.get(0),
+        )
     }
 
     pub fn set_user_password(
@@ -682,26 +701,109 @@ impl Db {
         must_change: bool,
     ) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("UPDATE app_users SET password_hash=?1,must_change_password=?2,updated_at=unixepoch() WHERE id=?3", rusqlite::params![hash, must_change as i64, user_id])?;
+        conn.execute("UPDATE app_users SET password_hash=?1,must_change_password=?2,password_updated_at=unixepoch(),updated_at=unixepoch() WHERE id=?3", rusqlite::params![hash, must_change as i64, user_id])?;
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn provision_user(
         &self,
         employee_id: i64,
         display_name: &str,
         username: &str,
+        cloud_email: &str,
         role: &str,
         password_hash: &str,
     ) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO app_users(employee_id,display_name,username,role,password_hash,must_change_password,active,updated_at)
-             VALUES(?1,?2,?3,?4,?5,1,1,unixepoch())
-             ON CONFLICT(username) DO UPDATE SET employee_id=excluded.employee_id,display_name=excluded.display_name,role=excluded.role,password_hash=excluded.password_hash,must_change_password=1,active=1,updated_at=unixepoch()",
-            rusqlite::params![employee_id, display_name, username.trim(), role, password_hash],
+            "INSERT INTO app_users(employee_id,display_name,username,cloud_email,role,password_hash,must_change_password,active,password_updated_at,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,1,1,unixepoch(),unixepoch())
+             ON CONFLICT(username) DO UPDATE SET employee_id=excluded.employee_id,display_name=excluded.display_name,cloud_email=excluded.cloud_email,role=excluded.role,password_hash=excluded.password_hash,must_change_password=1,active=1,password_updated_at=unixepoch(),updated_at=unixepoch()",
+            rusqlite::params![employee_id, display_name, username.trim(), cloud_email, role, password_hash],
         )?;
         Ok(())
+    }
+
+    /// Espelha um usuário da nuvem no banco local para login offline.
+    ///
+    /// A senha só é substituída quando a nuvem tem uma versão mais nova que a
+    /// última alteração local — assim uma troca de senha feita no PDV não é
+    /// sobrescrita pelo hash antigo no próximo delta-sync.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_cloud_user(
+        &self,
+        cloud_user_id: &str,
+        email: &str,
+        display_name: &str,
+        role: &str,
+        password_hash: &str,
+        must_change_password: bool,
+        active: bool,
+        cloud_updated_at: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let existing: Option<(i64, Option<i64>)> = conn
+            .query_row(
+                "SELECT id,password_updated_at FROM app_users
+                 WHERE (cloud_user_id=?1 AND ?1<>'')
+                    OR cloud_email=?2 COLLATE NOCASE
+                    OR username=?2 COLLATE NOCASE
+                 ORDER BY CASE WHEN cloud_user_id=?1 AND ?1<>'' THEN 0 WHEN cloud_email=?2 COLLATE NOCASE THEN 1 ELSE 2 END
+                 LIMIT 1",
+                rusqlite::params![cloud_user_id, email],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match existing {
+            None => {
+                conn.execute(
+                    "INSERT INTO app_users(display_name,username,cloud_user_id,cloud_email,role,password_hash,must_change_password,active,password_updated_at,updated_at)
+                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,unixepoch())",
+                    rusqlite::params![
+                        display_name,
+                        email,
+                        cloud_user_id,
+                        email,
+                        role,
+                        password_hash,
+                        must_change_password as i64,
+                        active as i64,
+                        cloud_updated_at
+                    ],
+                )?;
+            }
+            Some((id, password_updated_at)) => {
+                conn.execute(
+                    "UPDATE app_users SET display_name=?1,role=?2,active=?3,cloud_user_id=?4,cloud_email=?5,updated_at=unixepoch() WHERE id=?6",
+                    rusqlite::params![display_name, role, active as i64, cloud_user_id, email, id],
+                )?;
+                if cloud_updated_at > password_updated_at.unwrap_or(0) {
+                    conn.execute(
+                        "UPDATE app_users SET password_hash=?1,must_change_password=?2,password_updated_at=?3 WHERE id=?4",
+                        rusqlite::params![
+                            password_hash,
+                            must_change_password as i64,
+                            cloud_updated_at,
+                            id
+                        ],
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Desativa o usuário `admin` de fábrica assim que a loja passa a ter
+    /// usuários vindos da nuvem; evita credencial padrão em produção.
+    pub fn retire_local_admin(&self) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE app_users SET active=0,updated_at=unixepoch()
+             WHERE username='admin' COLLATE NOCASE AND cloud_user_id IS NULL AND active=1
+               AND EXISTS(SELECT 1 FROM app_users WHERE cloud_user_id IS NOT NULL AND active=1)",
+            [],
+        )
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> rusqlite::Result<()> {
@@ -1984,6 +2086,66 @@ mod tests {
         assert_eq!(closed.difference_brl_cents, 0);
         drop(db);
         remove_database(&path);
+    }
+
+    #[test]
+    fn cloud_user_sync_preserves_local_password_and_retires_seed_admin() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        db.upsert_cloud_user(
+            "cloud-1",
+            "dono@loja.com",
+            "Dono",
+            "admin",
+            "hash-cloud-1",
+            true,
+            true,
+            100,
+        )
+        .unwrap();
+        let user = db.auth_user("dono@loja.com").unwrap().unwrap();
+        assert_eq!(user.display_name, "Dono");
+        assert!(user.must_change_password);
+
+        // Troca de senha feita no PDV (offline) não pode ser sobrescrita por um
+        // delta-sync com hash mais antigo da nuvem.
+        db.set_user_password(user.id, "hash-local", false).unwrap();
+        db.upsert_cloud_user(
+            "cloud-1",
+            "dono@loja.com",
+            "Dono",
+            "admin",
+            "hash-cloud-1",
+            true,
+            true,
+            100,
+        )
+        .unwrap();
+        let user = db.auth_user("dono@loja.com").unwrap().unwrap();
+        assert_eq!(user.password_hash.as_deref(), Some("hash-local"));
+        assert!(!user.must_change_password);
+
+        // Já uma alteração mais nova na nuvem é aplicada.
+        let newer = chrono::Utc::now().timestamp() + 5;
+        db.upsert_cloud_user(
+            "cloud-1",
+            "dono@loja.com",
+            "Dono",
+            "admin",
+            "hash-cloud-2",
+            false,
+            true,
+            newer,
+        )
+        .unwrap();
+        let user = db.auth_user("dono@loja.com").unwrap().unwrap();
+        assert_eq!(user.password_hash.as_deref(), Some("hash-cloud-2"));
+        assert!(!user.must_change_password);
+
+        // Com usuários da nuvem presentes, o admin de fábrica é desativado.
+        assert!(db.has_cloud_users().unwrap());
+        assert_eq!(db.retire_local_admin().unwrap(), 1);
+        assert!(db.auth_user("admin").unwrap().is_none());
+        assert_eq!(db.retire_local_admin().unwrap(), 0);
     }
 
     #[test]

@@ -90,6 +90,12 @@ struct ActivationClaimResponse {
     unit_id: String,
     terminal_id: String,
     terminal_key: String,
+    #[serde(default)]
+    tenant_slug: Option<String>,
+    #[serde(default)]
+    tenant_name: Option<String>,
+    #[serde(default)]
+    owner_key: Option<String>,
     license: serde_json::Value,
 }
 
@@ -167,7 +173,10 @@ fn login_employee(
         Argon2::default()
             .verify_password(password.as_bytes(), &parsed)
             .map_err(|_| "Usuário ou senha inválidos")?;
-    } else if !(user.username.eq_ignore_ascii_case("admin") && password == "123456") {
+    } else if !(user.username.eq_ignore_ascii_case("admin")
+        && password == "123456"
+        && !state.db.has_cloud_users().unwrap_or(true))
+    {
         return Err("Usuário ou senha inválidos".into());
     } else {
         state
@@ -221,10 +230,27 @@ fn change_own_password(
     Argon2::default()
         .verify_password(current_password.as_bytes(), &parsed)
         .map_err(|_| "Senha atual inválida")?;
+    let new_hash = password_hash(&new_password)?;
     state
         .db
-        .set_user_password(user.id, &password_hash(&new_password)?, false)
-        .map_err(|e| e.to_string())
+        .set_user_password(user.id, &new_hash, false)
+        .map_err(|e| e.to_string())?;
+    if let Some(email) = user.cloud_email.clone() {
+        let payload = serde_json::json!({
+            "email": email,
+            "display_name": user.display_name,
+            "role": user.role,
+            "password_hash": new_hash,
+            "must_change_password": false,
+            "active": true
+        });
+        state
+            .db
+            .enqueue_outbox("user", "upsert", &payload.to_string())
+            .map_err(|e| e.to_string())?;
+        state.refresh_pending();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -503,7 +529,11 @@ fn cloud_sales_by_unit(from: i64, to: i64) -> Result<Vec<UnitSalesReport>, Strin
 }
 
 #[tauri::command]
-fn cloud_owner_overview(from: i64, to: i64) -> Result<OwnerOverview, String> {
+fn cloud_owner_overview(
+    state: tauri::State<'_, Arc<AppState>>,
+    from: i64,
+    to: i64,
+) -> Result<OwnerOverview, String> {
     if from < 0 || to < from {
         return Err("Período inválido".into());
     }
@@ -511,23 +541,8 @@ fn cloud_owner_overview(from: i64, to: i64) -> Result<OwnerOverview, String> {
     if api.is_empty() {
         return Err("Backend do proprietário não configurado".into());
     }
-    let tenant_id = std::env::var("COMMERCECTRL_TENANT_ID").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "00000000-0000-0000-0000-000000000001".into()
-        } else {
-            String::new()
-        }
-    });
-    let owner_key = std::env::var("COMMERCECTRL_OWNER_KEY").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "commercectrl-owner-dev-key".into()
-        } else {
-            String::new()
-        }
-    });
-    if tenant_id.is_empty() || owner_key.is_empty() {
-        return Err("Credencial do proprietário ausente".into());
-    }
+    let (tenant_id, owner_key) =
+        crate::sync::owner_credentials(&state.db).ok_or("Credencial do proprietário ausente")?;
     let response = ureq::get(&format!("{api}/api/v1/owner/overview?from={from}&to={to}"))
         .set("X-Tenant-Id", &tenant_id)
         .set("X-Owner-Key", &owner_key)
@@ -537,14 +552,9 @@ fn cloud_owner_overview(from: i64, to: i64) -> Result<OwnerOverview, String> {
     serde_json::from_reader(response.into_reader()).map_err(|e| e.to_string())
 }
 
-fn owner_request(request: ureq::Request) -> Result<ureq::Request, String> {
-    let tenant_id = std::env::var("COMMERCECTRL_TENANT_ID")
-        .unwrap_or_else(|_| "00000000-0000-0000-0000-000000000001".into());
-    let owner_key = std::env::var("COMMERCECTRL_OWNER_KEY")
-        .unwrap_or_else(|_| "commercectrl-owner-dev-key".into());
-    if tenant_id.is_empty() || owner_key.is_empty() {
-        return Err("Credencial do proprietário ausente".into());
-    }
+fn owner_request(db: &crate::db::Db, request: ureq::Request) -> Result<ureq::Request, String> {
+    let (tenant_id, owner_key) =
+        crate::sync::owner_credentials(db).ok_or("Credencial do proprietário ausente")?;
     Ok(request
         .set("X-Tenant-Id", &tenant_id)
         .set("X-Owner-Key", &owner_key)
@@ -552,26 +562,33 @@ fn owner_request(request: ureq::Request) -> Result<ureq::Request, String> {
 }
 
 #[tauri::command]
-fn cloud_owner_branding() -> Result<TenantBranding, String> {
+fn cloud_owner_branding(state: tauri::State<'_, Arc<AppState>>) -> Result<TenantBranding, String> {
     let api = cloud_api_url();
-    let response = owner_request(ureq::get(&format!("{api}/api/v1/owner/branding")))?
-        .call()
-        .map_err(|e| format!("Identidade cloud indisponível: {e}"))?;
+    let response = owner_request(
+        &state.db,
+        ureq::get(&format!("{api}/api/v1/owner/branding")),
+    )?
+    .call()
+    .map_err(|e| format!("Identidade cloud indisponível: {e}"))?;
     serde_json::from_reader(response.into_reader()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn cloud_save_owner_branding(
+    state: tauri::State<'_, Arc<AppState>>,
     display_name: String,
     logo_data_url: Option<String>,
 ) -> Result<TenantBranding, String> {
     let api = cloud_api_url();
     let body =
         serde_json::json!({"display_name":display_name,"logo_data_url":logo_data_url}).to_string();
-    let response = owner_request(ureq::put(&format!("{api}/api/v1/owner/branding")))?
-        .set("Content-Type", "application/json")
-        .send_string(&body)
-        .map_err(|e| format!("Não foi possível salvar a identidade: {e}"))?;
+    let response = owner_request(
+        &state.db,
+        ureq::put(&format!("{api}/api/v1/owner/branding")),
+    )?
+    .set("Content-Type", "application/json")
+    .send_string(&body)
+    .map_err(|e| format!("Não foi possível salvar a identidade: {e}"))?;
     serde_json::from_reader(response.into_reader()).map_err(|e| e.to_string())
 }
 
@@ -904,6 +921,13 @@ fn claim_activation(
             api_url,
         },
     )?;
+    if let (Some(slug), Some(name), Some(owner_key)) = (
+        claimed.tenant_slug.as_deref(),
+        claimed.tenant_name.as_deref(),
+        claimed.owner_key.as_deref(),
+    ) {
+        crate::sync::persist_activation_metadata(&state.db, slug, name, owner_key)?;
+    }
     crate::license::import_token(&state.db, &claimed.license.to_string(), Some("activation"))?;
     let _ = state.db.audit_license(
         "terminal_activated",
@@ -931,20 +955,7 @@ fn scan_license_media(
 fn refresh_license(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<crate::license::LicenseStatus, String> {
-    let current = crate::license::status(&state.db);
-    let credentials = crate::sync::credentials(&state.db).ok_or("terminal não ativado")?;
-    let body = serde_json::json!({"installation_id": current.installation_id}).to_string();
-    let response = crate::sync::authenticated(
-        ureq::post(&format!("{}/api/v1/licenses/renew", credentials.api_url)),
-        &credentials,
-    )
-    .set("Content-Type", "application/json")
-    .timeout(std::time::Duration::from_secs(8))
-    .send_string(&body)
-    .map_err(|e| format!("renovação de licença indisponível: {e}"))?;
-    let raw: serde_json::Value =
-        serde_json::from_reader(response.into_reader()).map_err(|e| e.to_string())?;
-    crate::license::import_token(&state.db, &raw.to_string(), Some("online"))
+    crate::sync::renew_license(&state.db)
 }
 
 // ── Outbox commands ──────────────────────────────────────────
@@ -967,6 +978,9 @@ fn sync_now(state: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
         .outbox
         .sync_pending()
         .map_err(|e| format!("sync: {e}"))?;
+    if let Err(e) = crate::sync::pull_users(&state.db) {
+        log::debug!("Delta-sync de usuários: {e}");
+    }
     state.set_online(true);
     state.refresh_pending();
     Ok(n)
@@ -1053,7 +1067,8 @@ fn provision_employee_login(
     temporary_password: String,
 ) -> Result<(), String> {
     state.require("employees")?;
-    if username.trim().len() < 3
+    let login = username.trim();
+    if login.len() < 3
         || !matches!(
             role.as_str(),
             "admin" | "manager" | "cashier" | "stock" | "finance" | "viewer"
@@ -1068,16 +1083,51 @@ fn provision_employee_login(
         .into_iter()
         .find(|item| item.id == employee_id && item.status == "Ativo")
         .ok_or_else(|| "Funcionário ativo não encontrado".to_string())?;
+    // Identidade única nuvem ↔ PDV: o e-mail é a chave. Se o operador digitou
+    // só um usuário, derivamos um e-mail estável com o slug da loja.
+    let email = if login.contains('@') {
+        login.to_lowercase()
+    } else {
+        let local: String = login
+            .chars()
+            .flat_map(char::to_lowercase)
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                    ch
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+        let local = local.trim_matches('.').to_string();
+        let local = if local.is_empty() {
+            "funcionario".to_string()
+        } else {
+            local
+        };
+        let slug = crate::sync::tenant_slug(&state.db).unwrap_or_else(|| "pdv".into());
+        format!("{local}@{slug}.commercectrl.local")
+    };
+    let hash = password_hash(&temporary_password)?;
     state
         .db
-        .provision_user(
-            employee_id,
-            &employee.name,
-            username.trim(),
-            &role,
-            &password_hash(&temporary_password)?,
-        )
-        .map_err(|e| e.to_string())
+        .provision_user(employee_id, &employee.name, login, &email, &role, &hash)
+        .map_err(|e| e.to_string())?;
+    let payload = serde_json::json!({
+        "email": email,
+        "username": login,
+        "display_name": employee.name,
+        "role": role,
+        "password_hash": hash,
+        "must_change_password": true,
+        "active": true
+    });
+    state
+        .db
+        .enqueue_outbox("user", "upsert", &payload.to_string())
+        .map_err(|e| e.to_string())?;
+    state.refresh_pending();
+    Ok(())
 }
 
 #[tauri::command]

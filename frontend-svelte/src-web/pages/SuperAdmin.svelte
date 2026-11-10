@@ -15,12 +15,19 @@
     X,
   } from "@lucide/svelte";
 
+  import type { PlatformTenantCreated } from "../lib/tauri.web";
+
   type Tenant = {
     id: string;
     name: string;
+    slug?: string | null;
     units: number;
     terminals: number;
     online_terminals: number;
+    subscription_status?: string | null;
+    billing_mode?: string | null;
+    courtesy_until?: string | null;
+    current_period_ends_at?: string | null;
     asaas_customer_id?: string | null;
   };
   type Activation = {
@@ -46,6 +53,11 @@
   let plan = $state("starter");
   let trialDays = $state(30);
   let createAsaas = $state(false);
+  let billingMode = $state<"paid" | "courtesy">("paid");
+  let courtesyMonths = $state(12);
+  let courtesyNote = $state("");
+  let created = $state<PlatformTenantCreated | null>(null);
+  let extendMonths = $state(12);
   let activation = $state<Activation | null>(null);
   let activationDays = $state(7);
 
@@ -127,31 +139,62 @@
     loading = true;
     error = "";
     try {
-      const created = await request<{ tenant_id: string; unit_id: string; asaas_customer_id?: string }>("/tenants", {
+      const payload: Record<string, unknown> = {
+        name,
+        unit_name: unitName,
+        email: email || undefined,
+        cnpj_cpf: cnpjCpf || undefined,
+        phone: phone || undefined,
+        plan,
+        trial_days: Number(trialDays),
+        create_asaas_customer: billingMode === "paid" ? createAsaas : false,
+        billing_mode: billingMode,
+      };
+      if (billingMode === "courtesy") {
+        payload.courtesy_months = Number(courtesyMonths);
+        payload.courtesy_note = courtesyNote || undefined;
+      }
+      const response = await request<PlatformTenantCreated>("/tenants", {
         method: "POST",
-        body: JSON.stringify({
-          name,
-          unit_name: unitName,
-          email: email || undefined,
-          cnpj_cpf: cnpjCpf || undefined,
-          phone: phone || undefined,
-          plan,
-          trial_days: Number(trialDays),
-          create_asaas_customer: createAsaas,
-        }),
+        body: JSON.stringify(payload),
       });
+      created = response;
       creating = false;
       name = "";
       email = "";
       cnpjCpf = "";
       phone = "";
       await refresh();
-      selectedId = created.tenant_id;
+      selectedId = response.tenant_id;
     } catch (cause) {
       error =
         cause instanceof Error
           ? cause.message
           : "Não foi possível criar o tenant.";
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function applyCourtesy(revoke: boolean) {
+    if (!selected) return;
+    loading = true;
+    error = "";
+    try {
+      await request(`/tenants/${selected.id}/courtesy`, {
+        method: "POST",
+        body: JSON.stringify(
+          revoke
+            ? { revoke: true }
+            : { months: Number(extendMonths), note: courtesyNote || undefined },
+        ),
+      });
+      await refresh();
+    } catch (cause) {
+      error =
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível atualizar a cortesia.";
     } finally {
       loading = false;
     }
@@ -361,14 +404,34 @@
                 ><option value="premium">PDV Premium · R$ 250</option></select
               ></label
             ><label
-              >Dias de teste<input
-                type="number"
-                min="0"
-                max="365"
-                bind:value={trialDays}
-              /></label
-            ><label class="check"><input type="checkbox" bind:checked={createAsaas}/> Criar cliente no Asaas para cobrança de assinatura</label
-            ><button class="primary" disabled={loading}
+              >Forma de acesso<select bind:value={billingMode}
+                ><option value="paid">Pago (Asaas)</option><option value="courtesy"
+                  >Cortesia (grátis)</option
+                ></select
+              ></label
+            >{#if billingMode === "courtesy"}<label
+                >Cortesia por (meses)<input
+                  type="number"
+                  min="1"
+                  max="24"
+                  bind:value={courtesyMonths}
+                /></label
+              ><label
+                >Motivo da cortesia<input
+                  bind:value={courtesyNote}
+                  placeholder="Parceria, demonstração..."
+                /></label
+              >{:else}<label
+                >Dias de teste<input
+                  type="number"
+                  min="0"
+                  max="365"
+                  bind:value={trialDays}
+                /></label
+              ><label class="check"
+                ><input type="checkbox" bind:checked={createAsaas}/> Criar cliente no
+                Asaas para cobrança de assinatura</label
+              >{/if}<button class="primary" disabled={loading}
               >Criar tenant e unidade</button
             >
           </form>{:else if selected}<div class="section-title">
@@ -378,6 +441,28 @@
             </div>
             <span class="ok">Operacional</span>
           </div>
+          {#if created}
+            <section class="admin-section credentials">
+              <h3><Shield size={17} /> Credenciais de {created.name}</h3>
+              <p>
+                Guarde agora: a senha temporária não será exibida novamente.
+              </p>
+              <div class="cred-grid">
+                <div><small>Loja (slug)</small><strong>{created.slug}</strong></div>
+                <div><small>Login do painel</small><strong>{created.owner_email}</strong></div>
+                <div><small>Senha temporária</small><strong>{created.owner_password}</strong></div>
+                <div><small>Owner key (PDV)</small><strong>{created.owner_key}</strong></div>
+              </div>
+              {#if created.billing_mode === "courtesy" && created.courtesy_until}
+                <p class="ok">
+                  Cortesia válida até {new Date(created.courtesy_until).toLocaleDateString("pt-BR")}
+                </p>
+              {/if}
+              <button class="outline" onclick={() => (created = null)}
+                >Já anotei, ocultar</button
+              >
+            </section>
+          {/if}
           <div class="detail-stats">
             <div>
               <small>Unidades</small><strong>{selected.units}</strong><span
@@ -395,6 +480,40 @@
               ><span>{selected.asaas_customer_id ? "Cadastrado" : "Não vinculado"}</span>
             </div>
           </div>
+          <section class="admin-section">
+            <h3>Cortesia</h3>
+            {#if selected.billing_mode === "courtesy" && selected.courtesy_until}
+              <p>
+                Acesso gratuito até
+                <strong>{new Date(selected.courtesy_until).toLocaleDateString("pt-BR")}</strong
+                >.
+              </p>
+            {:else}
+              <p>
+                Loja em modo pago{selected.subscription_status
+                  ? ` (${selected.subscription_status})`
+                  : ""}.
+              </p>
+            {/if}
+            <div class="activation-row">
+              <label
+                >Estender (meses)<input
+                  type="number"
+                  min="1"
+                  max="24"
+                  bind:value={extendMonths}
+                /></label
+              ><button
+                class="primary"
+                onclick={() => applyCourtesy(false)}
+                disabled={loading}>Conceder / estender</button
+              ><button
+                class="outline"
+                onclick={() => applyCourtesy(true)}
+                disabled={loading}>Revogar</button
+              >
+            </div>
+          </section>
           <section class="admin-section">
             <h3><KeyRound size={17} /> Ativar terminal</h3>
             <p>
@@ -692,6 +811,32 @@
   }
   .admin-section h3 :global(svg) {
     color: var(--green);
+  }
+  .credentials {
+    background: #f3f7ee;
+  }
+  .cred-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 14px 0;
+  }
+  .cred-grid div {
+    border: 1px solid var(--line);
+    background: #fff;
+    padding: 10px 12px;
+    display: grid;
+    gap: 4px;
+    overflow-wrap: anywhere;
+  }
+  .cred-grid small {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #66705f;
+  }
+  .cred-grid strong {
+    font: 650 14px "Space Grotesk";
   }
   .activation-row {
     margin-top: 18px;

@@ -12,7 +12,9 @@ const TOKEN_SETTING: &str = "license.token";
 const INSTALLATION_SETTING: &str = "license.installation_id";
 const INSTALLED_AT_SETTING: &str = "license.installed_at";
 const LAST_SEEN_SETTING: &str = "license.last_seen_at";
+const PAYMENT_BLOCKED_SETTING: &str = "license.payment_blocked_at";
 const TRIAL_DAYS: i64 = 30;
+const BLOCKED_GRACE_SECS: i64 = 7 * 86_400;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LicenseClaims {
@@ -222,6 +224,35 @@ pub fn status(db: &Db) -> LicenseStatus {
     } else {
         (false, "restricted", "Licença e carência expiradas")
     };
+    // A nuvem respondeu 402 (assinatura suspensa/vencida): garante no máximo
+    // 7 dias de carência a partir do aviso, mesmo que a licença local ainda
+    // tenha prazo longo (ex.: cortesia revogada no meio do período).
+    let blocked_at = db
+        .get_setting(PAYMENT_BLOCKED_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<i64>().ok());
+    if let Some(blocked_at) = blocked_at {
+        let limit = blocked_at + BLOCKED_GRACE_SECS;
+        if now > limit {
+            return LicenseStatus {
+                allowed_to_sell: false,
+                mode: "restricted".into(),
+                installation_id,
+                expires_at: Some(token.claims.expires_at),
+                grace_until: Some(token.claims.grace_until.min(limit)),
+                message: "Assinatura suspensa; carência de 7 dias encerrada".into(),
+            };
+        }
+        return LicenseStatus {
+            allowed_to_sell: allowed,
+            mode: if allowed { "grace" } else { "restricted" }.into(),
+            installation_id,
+            expires_at: Some(token.claims.expires_at),
+            grace_until: Some(token.claims.grace_until.min(limit)),
+            message: "Assinatura suspensa pela nuvem; vendas liberadas durante a carência".into(),
+        };
+    }
     LicenseStatus {
         allowed_to_sell: allowed,
         mode: mode.into(),
@@ -246,9 +277,28 @@ pub fn import_token(db: &Db, raw: &str, source: Option<&str>) -> Result<LicenseS
     let canonical = serde_json::to_string(&token).map_err(|e| e.to_string())?;
     db.set_setting(TOKEN_SETTING, &canonical)
         .map_err(|e| e.to_string())?;
+    // Licença válida recebida (ativação, renovação ou importação manual):
+    // encerra qualquer bloqueio por assinatura suspensa.
+    let _ = db.set_setting(PAYMENT_BLOCKED_SETTING, "");
     db.audit_license("license_imported", source)
         .map_err(|e| e.to_string())?;
     Ok(status(db))
+}
+
+/// Registra que a nuvem negou a renovação por assinatura suspensa/vencida.
+/// Mantém o primeiro aviso para não reiniciar a carência de 7 dias a cada sync.
+pub fn mark_payment_blocked(db: &Db) -> Result<(), String> {
+    let existing = db
+        .get_setting(PAYMENT_BLOCKED_SETTING)
+        .map_err(|e| e.to_string())?
+        .and_then(|value| value.parse::<i64>().ok());
+    if existing.is_none() {
+        db.set_setting(PAYMENT_BLOCKED_SETTING, &Utc::now().timestamp().to_string())
+            .map_err(|e| e.to_string())?;
+        db.audit_license("payment_blocked", Some("assinatura suspensa ou vencida"))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn scan_removable(db: &Db) -> Result<LicenseStatus, String> {
@@ -333,6 +383,45 @@ mod tests {
         assert!(renewed.allowed_to_sell);
         assert_eq!(renewed.mode, "active");
         assert!(status(&db).allowed_to_sell);
+    }
+
+    #[test]
+    fn bloqueio_da_nuvem_limita_carencia_a_sete_dias() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let initial = status(&db);
+        let now = Utc::now().timestamp();
+        let mut claims = LicenseClaims {
+            tenant_id: "tenant".into(),
+            unit_id: "unit".into(),
+            installation_id: initial.installation_id,
+            issued_at: now,
+            expires_at: now + 30 * 86_400,
+            grace_until: now + 37 * 86_400,
+            nonce: "block-test".into(),
+        };
+        let token = signed(claims.clone());
+        assert!(import_token(&db, &token, Some("test")).unwrap().allowed_to_sell);
+
+        mark_payment_blocked(&db).unwrap();
+        let limited = status(&db);
+        assert!(limited.allowed_to_sell);
+        assert!(limited.grace_until.unwrap() <= now + 7 * 86_400 + 5);
+
+        db.set_setting(PAYMENT_BLOCKED_SETTING, &(now - 8 * 86_400).to_string())
+            .unwrap();
+        assert!(!status(&db).allowed_to_sell);
+
+        // Uma licença nova (renovação/importação) encerra o bloqueio.
+        claims.expires_at = now + 60 * 86_400;
+        claims.grace_until = now + 67 * 86_400;
+        claims.nonce = "renewed".into();
+        assert!(import_token(&db, &signed(claims), Some("test"))
+            .unwrap()
+            .allowed_to_sell);
+        assert_eq!(
+            db.get_setting(PAYMENT_BLOCKED_SETTING).unwrap().as_deref(),
+            Some("")
+        );
     }
 
     #[test]

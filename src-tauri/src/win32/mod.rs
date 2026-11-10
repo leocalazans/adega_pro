@@ -65,10 +65,10 @@ mod ffi {
     pub const WM_KEYDOWN: u32 = 0x0100;
     pub const WM_SYSKEYDOWN: u32 = 0x0104;
 
-    pub const VK_MENU: i16 = 0x12;    // Alt
+    pub const VK_MENU: i16 = 0x12; // Alt
     pub const VK_CONTROL: i16 = 0x11; // Ctrl
-    pub const VK_LWIN: i16 = 0x5B;    // Tecla Windows esquerda
-    pub const VK_RWIN: i16 = 0x5C;    // Tecla Windows direita
+    pub const VK_LWIN: i16 = 0x5B; // Tecla Windows esquerda
+    pub const VK_RWIN: i16 = 0x5C; // Tecla Windows direita
     pub const VK_TAB: i16 = 0x09;
     pub const VK_ESCAPE: i16 = 0x1B;
     pub const VK_F4: i16 = 0x73;
@@ -103,12 +103,8 @@ mod ffi {
             h_mod: HINSTANCE,
             dw_thread_id: u32,
         ) -> HHOOK;
-        pub fn CallNextHookEx(
-            hhk: HHOOK,
-            n_code: i32,
-            w_param: WPARAM,
-            l_param: LPARAM,
-        ) -> LRESULT;
+        pub fn CallNextHookEx(hhk: HHOOK, n_code: i32, w_param: WPARAM, l_param: LPARAM)
+            -> LRESULT;
         pub fn UnhookWindowsHookEx(hhk: HHOOK) -> i32;
         pub fn GetAsyncKeyState(v_key: i16) -> i16;
         pub fn GetModuleHandleW(lp_module_name: *const u16) -> HINSTANCE;
@@ -154,12 +150,12 @@ unsafe extern "system" fn low_level_keyboard_proc(
             let ctrl_pressed = GetAsyncKeyState(VK_CONTROL) < 0;
 
             let blocked = match vk as i16 {
-                VK_F4 if alt_pressed => true,   // Alt+F4
-                VK_TAB if alt_pressed => true,  // Alt+Tab
-                VK_LWIN => true,                // Win esquerda
-                VK_RWIN => true,                // Win direita
+                VK_F4 if alt_pressed => true,      // Alt+F4
+                VK_TAB if alt_pressed => true,     // Alt+Tab
+                VK_LWIN => true,                   // Win esquerda
+                VK_RWIN => true,                   // Win direita
                 VK_ESCAPE if ctrl_pressed => true, // Ctrl+Esc
-                VK_W if ctrl_pressed => true,   // Ctrl+W
+                VK_W if ctrl_pressed => true,      // Ctrl+W
                 _ => false,
             };
 
@@ -181,12 +177,7 @@ pub fn install_keyboard_hook() -> Result<(), String> {
         if hinstance == 0 {
             return Err("GetModuleHandleW retornou NULL".into());
         }
-        let hook = SetWindowsHookExA(
-            WH_KEYBOARD_LL,
-            Some(low_level_keyboard_proc),
-            hinstance,
-            0,
-        );
+        let hook = SetWindowsHookExA(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), hinstance, 0);
         if hook == 0 {
             return Err("SetWindowsHookExA retornou 0 (falha ao instalar hook)".into());
         }
@@ -258,7 +249,12 @@ pub fn install_barcode_hook(_state: Arc<AppState>) -> Result<(), String> {
     Ok(())
 }
 
-pub fn process_raw_input_msg(_l_param: isize, _app: &tauri::AppHandle, _buffer: &mut BarcodeBuffer) {}
+pub fn process_raw_input_msg(
+    _l_param: isize,
+    _app: &tauri::AppHandle,
+    _buffer: &mut BarcodeBuffer,
+) {
+}
 
 pub fn open_cash_drawer() -> Result<(), String> {
     Err("Abertura de gaveta via Win32 Print Spooler ainda não implementada".into())
