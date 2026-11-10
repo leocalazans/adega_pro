@@ -32,11 +32,11 @@
     const existing = tenantMe().catch(() => null);
     if (existing) {
       existing.then((s) => {
-        if (s) {
+        if (s && !s.must_change_password) {
           session = {
             user_id: 0,
             employee_id: null,
-            display_name: s.email,
+            display_name: s.display_name || s.email,
             username: s.email,
             role: s.role,
             permissions: ["*"],

@@ -1336,7 +1336,7 @@ async fn tenant_change_password(
     State(state): State<Arc<AppState>>,
     auth: TenantAuth,
     Json(request): Json<TenantPasswordRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     if request.new_password.len() < 8 || request.new_password.len() > 128 {
         return Err(error(
             StatusCode::BAD_REQUEST,
@@ -1374,13 +1374,23 @@ async fn tenant_change_password(
         .execute(&state.db)
         .await
         .map_err(internal)?;
-    // Encerra as demais sessões deste usuário; a sessão atual continua válida.
+    // Encerra todas as sessões antigas e emite um novo cookie, mantendo o
+    // usuário logado após a troca (obrigatória ou voluntária).
     sqlx::query("DELETE FROM tenant_sessions WHERE user_id=$1")
         .bind(auth.user_id)
         .execute(&state.db)
         .await
         .map_err(internal)?;
-    Ok(Json(serde_json::json!({"ok": true})))
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    sqlx::query("INSERT INTO tenant_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '7 days')")
+        .bind(hash_key(&token))
+        .bind(auth.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::SET_COOKIE, tenant_session_cookie(&token)?);
+    Ok((headers, Json(serde_json::json!({"ok": true}))))
 }
 
 async fn tenant_logout(
