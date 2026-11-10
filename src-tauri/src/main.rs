@@ -248,7 +248,7 @@ fn change_own_password(
             .db
             .enqueue_outbox("user", "upsert", &payload.to_string())
             .map_err(|e| e.to_string())?;
-        state.refresh_pending();
+        state.notify_sync();
     }
     Ok(())
 }
@@ -757,7 +757,7 @@ fn save_product(
         .db
         .enqueue_outbox("product", "upsert", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -783,7 +783,7 @@ fn adjust_stock(
         .db
         .enqueue_outbox("stock_movement", "update", &payload)
         .map_err(|e| format!("outbox: {e}"))?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(new_stock)
 }
 
@@ -807,7 +807,7 @@ fn archive_product(state: tauri::State<'_, Arc<AppState>>, ean: String) -> Resul
         .db
         .enqueue_outbox("product", "archive", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(())
 }
 
@@ -830,7 +830,7 @@ fn create_purchase_order(
         .db
         .enqueue_outbox("purchase_order", "create", &payload)
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(id)
 }
 
@@ -860,7 +860,7 @@ fn record_sale(
                 .filter(|value| !value.trim().is_empty()),
         )
         .map_err(|e| format!("falha ao gravar venda: {e}"))?;
-    state.refresh_pending();
+    state.notify_sync();
     let _ = state.publish(serde_json::to_string(&sale).unwrap_or_default());
     Ok(sale)
 }
@@ -971,18 +971,21 @@ fn pending_outbox(
 fn sync_now(state: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
     if !state.outbox.is_configured() {
         state.set_online(false);
-        state.refresh_pending();
+        state.notify_sync();
         return Err("sincronização em nuvem ainda não configurada".into());
     }
     let n = state
         .outbox
         .sync_pending()
         .map_err(|e| format!("sync: {e}"))?;
-    if let Err(e) = crate::sync::pull_users(&state.db) {
+    if let Err(e) = crate::sync::pull_users(&state.db, false) {
         log::debug!("Delta-sync de usuários: {e}");
     }
+    if let Err(e) = crate::sync::pull_products(&state.db, false) {
+        log::debug!("Delta-sync de produtos: {e}");
+    }
     state.set_online(true);
-    state.refresh_pending();
+    state.notify_sync();
     Ok(n)
 }
 
@@ -1034,7 +1037,7 @@ fn record_time_entry(
             &serde_json::to_string(&item).unwrap(),
         )
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1054,7 +1057,7 @@ fn save_employee(
         .db
         .enqueue_outbox("employee", "create", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1126,7 +1129,7 @@ fn provision_employee_login(
         .db
         .enqueue_outbox("user", "upsert", &payload.to_string())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(())
 }
 
@@ -1153,7 +1156,7 @@ fn update_employee(
         .db
         .enqueue_outbox("employee", "update", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1189,7 +1192,7 @@ fn save_expense(
         .db
         .enqueue_outbox("expense", "create", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1226,7 +1229,7 @@ fn update_expense(
         .db
         .enqueue_outbox("expense", "update", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1252,7 +1255,7 @@ fn save_supplier(
         .db
         .enqueue_outbox("supplier", "create", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1283,7 +1286,7 @@ fn update_supplier(
         .db
         .enqueue_outbox("supplier", "update", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1313,7 +1316,7 @@ fn enqueue_status(
         .db
         .enqueue_outbox(entity, "update", &payload)
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(())
 }
 
@@ -1423,7 +1426,7 @@ fn save_promotion(
             &serde_json::to_string(&item).unwrap(),
         )
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1459,7 +1462,7 @@ fn update_promotion(
             &serde_json::to_string(&item).unwrap(),
         )
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1525,7 +1528,7 @@ fn cash_open(
         .db
         .enqueue_outbox("cash_session", "create", &payload.to_string())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(status)
 }
 
@@ -1544,7 +1547,7 @@ fn cash_close(
         .db
         .enqueue_outbox("cash_session", "update", &payload.to_string())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(status)
 }
 
@@ -1571,7 +1574,7 @@ fn cash_sangria(
             &serde_json::to_string(&movement).unwrap(),
         )
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(movement)
 }
 
@@ -1598,7 +1601,7 @@ fn cash_suprimento(
             &serde_json::to_string(&movement).unwrap(),
         )
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(movement)
 }
 
@@ -1757,7 +1760,7 @@ fn upsert_customer(
         .db
         .enqueue_outbox("customer", "upsert", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 
@@ -1784,7 +1787,7 @@ fn update_customer(
         .db
         .enqueue_outbox("customer", "update", &serde_json::to_string(&item).unwrap())
         .map_err(|e| e.to_string())?;
-    state.refresh_pending();
+    state.notify_sync();
     Ok(item)
 }
 

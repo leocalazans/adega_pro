@@ -17,6 +17,7 @@ struct RemoteProduct {
     min_stock: f64,
     active: bool,
     image_url: Option<String>,
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +40,13 @@ const API_URL_SETTING: &str = "activation.api_url";
 const OWNER_KEY_SETTING: &str = "activation.owner_key";
 const TENANT_SLUG_SETTING: &str = "activation.tenant_slug";
 const TENANT_NAME_SETTING: &str = "activation.tenant_name";
+const PRODUCTS_CURSOR_SETTING: &str = "sync.products_cursor";
+const USERS_CURSOR_SETTING: &str = "sync.users_cursor";
+/// Janela de sobreposição no delta-sync. Duas gravações podem compartilhar o
+/// mesmo instante e um commit atrasado pode ficar com timestamp anterior ao
+/// cursor; repetir alguns segundos é inofensivo porque os upserts são
+/// idempotentes.
+const CURSOR_OVERLAP_MILLIS: i64 = 5_000;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ActivationStatus {
@@ -201,8 +209,16 @@ impl Outbox {
                     self.db.mark_outbox_sent(row.id)?;
                     synced += 1;
                 }
-                Ok(false) | Err(_) => {
-                    self.db.mark_outbox_failed(row.id, "falha de rede")?;
+                Ok(false) => {
+                    // Resposta não-2xx: vale seguir para os próximos itens,
+                    // pois um payload inválido não impede os demais.
+                    self.db.mark_outbox_failed(row.id, "resposta não-2xx")?;
+                }
+                Err(error) => {
+                    // Falha de transporte: o restante também vai falhar e
+                    // cada tentativa custa um timeout. Encerra o ciclo.
+                    self.db.mark_outbox_failed(row.id, &error)?;
+                    break;
                 }
             }
         }
@@ -230,20 +246,43 @@ fn push_to_api(db: &Db, row: &OutboxRow) -> Result<bool, String> {
     Ok((200..300).contains(&resp.status()))
 }
 
-fn pull_products(db: &Db) -> Result<usize, String> {
+fn read_cursor(db: &Db, key: &str) -> Option<i64> {
+    db.get_setting(key)
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+}
+
+fn store_cursor(db: &Db, key: &str, value: i64) -> Result<(), String> {
+    if value > 0 {
+        db.set_setting(key, &value.to_string())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn pull_products(db: &Db, full: bool) -> Result<usize, String> {
     let credentials = credentials(db).ok_or("terminal não ativado")?;
-    let resp = authenticated(
-        ureq::get(&format!("{}/api/v1/sync/products", credentials.api_url)),
-        &credentials,
-    )
-    .timeout(Duration::from_secs(5))
-    .call()
-    .map_err(|e| format!("{e}"))?;
+    let mut endpoint = format!("{}/api/v1/sync/products", credentials.api_url);
+    let stored = read_cursor(db, PRODUCTS_CURSOR_SETTING);
+    let since = (!full).then_some(stored).flatten();
+    if let Some(cursor) = since {
+        endpoint.push_str(&format!(
+            "?since={}",
+            cursor.saturating_sub(CURSOR_OVERLAP_MILLIS)
+        ));
+    }
+    let resp = authenticated(ureq::get(&endpoint), &credentials)
+        .timeout(Duration::from_secs(5))
+        .call()
+        .map_err(|e| format!("{e}"))?;
     if !(200..300).contains(&resp.status()) {
         return Ok(0);
     }
     let body = resp.into_string().map_err(|e| format!("{e}"))?;
     let products: Vec<RemoteProduct> = serde_json::from_str(&body).map_err(|e| format!("{e}"))?;
+    let mut newest = stored.unwrap_or(0);
     for p in &products {
         db.upsert_product(
             &p.ean,
@@ -260,24 +299,35 @@ fn pull_products(db: &Db) -> Result<usize, String> {
             .map_err(|e| format!("{e}"))?;
         db.set_product_image(&p.ean, p.image_url.as_deref())
             .map_err(|e| format!("{e}"))?;
+        if let Some(updated_at) = p.updated_at {
+            newest = newest.max(updated_at.timestamp_millis());
+        }
     }
+    store_cursor(db, PRODUCTS_CURSOR_SETTING, newest)?;
     Ok(products.len())
 }
 
-pub fn pull_users(db: &Db) -> Result<usize, String> {
+pub fn pull_users(db: &Db, full: bool) -> Result<usize, String> {
     let credentials = credentials(db).ok_or("terminal não ativado")?;
-    let resp = authenticated(
-        ureq::get(&format!("{}/api/v1/sync/users", credentials.api_url)),
-        &credentials,
-    )
-    .timeout(Duration::from_secs(5))
-    .call()
-    .map_err(|e| format!("{e}"))?;
+    let mut endpoint = format!("{}/api/v1/sync/users", credentials.api_url);
+    let stored = read_cursor(db, USERS_CURSOR_SETTING);
+    let since = (!full).then_some(stored).flatten();
+    if let Some(cursor) = since {
+        endpoint.push_str(&format!(
+            "?since={}",
+            cursor.saturating_sub(CURSOR_OVERLAP_MILLIS)
+        ));
+    }
+    let resp = authenticated(ureq::get(&endpoint), &credentials)
+        .timeout(Duration::from_secs(5))
+        .call()
+        .map_err(|e| format!("{e}"))?;
     if !(200..300).contains(&resp.status()) {
         return Ok(0);
     }
     let body = resp.into_string().map_err(|e| format!("{e}"))?;
     let users: Vec<RemoteUser> = serde_json::from_str(&body).map_err(|e| format!("{e}"))?;
+    let mut newest = stored.unwrap_or(0);
     for user in &users {
         let role = match user.role.as_str() {
             "owner" | "admin" | "superadmin" => "admin",
@@ -304,10 +354,12 @@ pub fn pull_users(db: &Db) -> Result<usize, String> {
             user.updated_at.timestamp(),
         )
         .map_err(|e| format!("{e}"))?;
+        newest = newest.max(user.updated_at.timestamp_millis());
     }
     if !users.is_empty() {
         db.retire_local_admin().map_err(|e| format!("{e}"))?;
     }
+    store_cursor(db, USERS_CURSOR_SETTING, newest)?;
     Ok(users.len())
 }
 
@@ -343,10 +395,34 @@ pub fn renew_license(db: &Db) -> Result<crate::license::LicenseStatus, String> {
 }
 
 pub fn worker(state: Arc<AppState>, _api_url: String) {
-    let mut tick: u64 = 0;
+    // Ciclo periódico de 3 minutos; vendas e cadastros acordam o worker na hora.
+    const PERIOD: Duration = Duration::from_secs(180);
+    const DRAIN: Duration = Duration::from_secs(10);
+    const FULL_PULL_SECS: i64 = 86_400;
+    const LICENSE_SECS: i64 = 600;
+
+    let mut first = true;
+    let mut failure_streak: u32 = 0;
+    let mut last_full_pull: i64 = 0;
+    let mut last_license_check: i64 = 0;
+
     loop {
-        std::thread::sleep(Duration::from_secs(5));
-        tick = tick.wrapping_add(1);
+        if !first {
+            let pending = state.db.count_pending_outbox().unwrap_or(0);
+            let wait = if failure_streak > 0 {
+                // 5, 10, 20, 40, 80, 160, 180 segundos.
+                let seconds = 5u64
+                    .saturating_mul(1u64 << (failure_streak - 1).min(5))
+                    .min(PERIOD.as_secs());
+                Duration::from_secs(seconds)
+            } else if pending > 0 {
+                DRAIN
+            } else {
+                PERIOD
+            };
+            state.wait_for_wake(wait);
+        }
+        first = false;
 
         if !state.outbox.is_configured() {
             state.set_online(false);
@@ -354,7 +430,11 @@ pub fn worker(state: Arc<AppState>, _api_url: String) {
             continue;
         }
 
+        let now = chrono::Utc::now().timestamp();
+        let full = now - last_full_pull >= FULL_PULL_SECS;
         let mut online = false;
+        let mut pulls_ok = true;
+
         match state.outbox.sync_pending() {
             Ok(count) if count > 0 => {
                 log::info!("Outbox: {count} itens sincronizados");
@@ -366,34 +446,52 @@ pub fn worker(state: Arc<AppState>, _api_url: String) {
             // Sem itens na outbox nenhuma chamada de rede foi feita; o pull abaixo
             // é quem confirma que o backend está realmente acessível.
             Ok(_) => {}
-            Err(e) => log::warn!("Outbox: erro {e}"),
+            Err(e) => {
+                log::warn!("Outbox: erro {e}");
+                pulls_ok = false;
+            }
         }
 
-        match pull_products(&state.db) {
-            Ok(n) if n > 0 => {
-                log::info!("Produtos sincronizados do servidor: {n}");
+        match pull_products(&state.db, full) {
+            Ok(n) => {
                 online = true;
-                state.publish(
-                    serde_json::json!({"event": "products_synced", "count": n}).to_string(),
-                );
+                if n > 0 {
+                    log::info!("Produtos sincronizados do servidor: {n}");
+                    state.publish(
+                        serde_json::json!({"event": "products_synced", "count": n}).to_string(),
+                    );
+                }
             }
-            Ok(_) => online = true,
-            Err(e) => log::debug!("Delta-sync de produtos: {e}"),
+            Err(e) => {
+                pulls_ok = false;
+                log::debug!("Delta-sync de produtos: {e}");
+            }
         }
 
-        match pull_users(&state.db) {
-            Ok(n) if n > 0 => {
-                log::info!("Usuários sincronizados do servidor: {n}");
+        match pull_users(&state.db, full) {
+            Ok(n) => {
                 online = true;
-                state.publish(serde_json::json!({"event": "users_synced", "count": n}).to_string());
+                if n > 0 {
+                    log::info!("Usuários sincronizados do servidor: {n}");
+                    state.publish(
+                        serde_json::json!({"event": "users_synced", "count": n}).to_string(),
+                    );
+                }
             }
-            Ok(_) => online = true,
-            Err(e) => log::debug!("Delta-sync de usuários: {e}"),
+            Err(e) => {
+                pulls_ok = false;
+                log::debug!("Delta-sync de usuários: {e}");
+            }
+        }
+
+        if full && online && pulls_ok {
+            last_full_pull = now;
         }
 
         // A cada ~10 minutos confirma a assinatura com a nuvem: cortesia
         // estendida chega ao PDV e uma suspensão inicia a carência de 7 dias.
-        if tick % 120 == 0 {
+        if now - last_license_check >= LICENSE_SECS {
+            last_license_check = now;
             match renew_license(&state.db) {
                 Ok(status) => {
                     online = true;
@@ -408,5 +506,11 @@ pub fn worker(state: Arc<AppState>, _api_url: String) {
 
         state.set_online(online);
         state.refresh_pending();
+
+        if online {
+            failure_streak = 0;
+        } else {
+            failure_streak = (failure_streak + 1).min(6);
+        }
     }
 }

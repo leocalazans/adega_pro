@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::Condvar;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::db::Db;
 use crate::printer::PrintWorker;
@@ -49,6 +51,8 @@ pub struct AppState {
     /// Set only after a successful local administrator PIN verification.
     pub kiosk_exit_authorized: Arc<AtomicBool>,
     pub current_user: Arc<Mutex<Option<UserSession>>>,
+    /// Acorda o worker de sincronização: `true` = existe um pedido pendente.
+    wake: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl AppState {
@@ -62,6 +66,7 @@ impl AppState {
             sync: Arc::new(Mutex::new(SyncInfo::default())),
             kiosk_exit_authorized: Arc::new(AtomicBool::new(false)),
             current_user: Arc::new(Mutex::new(None)),
+            wake: Arc::new((Mutex::new(false), Condvar::new())),
         }
     }
 
@@ -119,6 +124,32 @@ impl AppState {
         sync.pending = pending;
         sync.conflicts = conflicts;
         sync.last_error = last_error;
+    }
+
+    /// Acorda o worker para subir a outbox agora (sem esperar o ciclo periódico)
+    /// e atualiza o contador de pendências exibido na interface.
+    pub fn notify_sync(&self) {
+        self.wake_sync();
+        self.refresh_pending();
+    }
+
+    pub fn wake_sync(&self) {
+        let (pending, wake) = &*self.wake;
+        *pending.lock().unwrap() = true;
+        wake.notify_all();
+    }
+
+    /// Dorme até o próximo ciclo ou até alguém pedir sincronização.
+    /// Um pedido feito durante o ciclo anterior é consumido imediatamente.
+    pub fn wait_for_wake(&self, timeout: Duration) {
+        let (pending, wake) = &*self.wake;
+        let mut requested = pending.lock().unwrap();
+        if *requested {
+            *requested = false;
+            return;
+        }
+        let (mut requested, _) = wake.wait_timeout(requested, timeout).unwrap();
+        *requested = false;
     }
 
     pub fn status(&self) -> SyncInfo {

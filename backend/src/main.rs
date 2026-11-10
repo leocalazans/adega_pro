@@ -358,11 +358,18 @@ struct ProductOut {
     min_stock: f64,
     active: bool,
     image_url: Option<String>,
+    updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ProductsQuery {
     limit: Option<i64>,
+    since: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncUsersQuery {
+    since: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3118,12 +3125,14 @@ struct SyncUserOut {
 async fn sync_users(
     State(state): State<Arc<AppState>>,
     auth: TerminalAuth,
+    Query(query): Query<SyncUsersQuery>,
 ) -> Result<Json<Vec<SyncUserOut>>, ApiError> {
     let rows = sqlx::query_as::<_, SyncUserOut>(
-        "SELECT id,email,display_name,role,password_hash,must_change_password,active,updated_at FROM tenant_users WHERE tenant_id=$1 AND (unit_id IS NULL OR unit_id=$2) ORDER BY email",
+        "SELECT id,email,display_name,role,password_hash,must_change_password,active,updated_at FROM tenant_users WHERE tenant_id=$1 AND (unit_id IS NULL OR unit_id=$2) AND ($3::bigint IS NULL OR updated_at > to_timestamp(($3::bigint)::float8 / 1000)) ORDER BY updated_at,email",
     )
     .bind(auth.tenant_id)
     .bind(auth.unit_id)
+    .bind(query.since)
     .fetch_all(&state.db)
     .await
     .map_err(internal)?;
@@ -3135,9 +3144,49 @@ async fn products(
     auth: TerminalAuth,
     Query(query): Query<ProductsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let rows = sqlx::query_as::<_, ProductOut>(
-        "SELECT p.ean,p.part_number,p.description,p.brand,COALESCE(s.price_brl_cents,p.price_brl_cents) AS price_brl_cents,COALESCE(SUM(m.delta),0)::float8 AS stock_qty,COALESCE(s.min_stock,p.min_stock) AS min_stock,COALESCE(s.active,p.active) AS active,p.image_data_url AS image_url FROM products p LEFT JOIN product_unit_settings s ON s.tenant_id=p.tenant_id AND s.unit_id=$2 AND s.ean=p.ean LEFT JOIN stock_movements m ON m.tenant_id=p.tenant_id AND m.unit_id=$2 AND m.ean=p.ean WHERE p.tenant_id=$1 GROUP BY p.ean,p.part_number,p.description,p.brand,p.price_brl_cents,p.min_stock,p.active,p.image_data_url,p.updated_at,s.price_brl_cents,s.min_stock,s.active ORDER BY p.updated_at,p.ean LIMIT $3",
-    ).bind(auth.tenant_id).bind(auth.unit_id).bind(query.limit.unwrap_or(1000).clamp(1,5000)).fetch_all(&state.db).await.map_err(internal)?;
+    // `updated_at` devolvido é o maior entre produto, ajustes por unidade e o
+    // último movimento de estoque recebido — assim o cursor do PDV também
+    // avança quando outro terminal vende/ajusta estoque nesta unidade.
+    let sql = "
+        SELECT p.ean,
+               p.part_number,
+               p.description,
+               p.brand,
+               COALESCE(s.price_brl_cents,p.price_brl_cents) AS price_brl_cents,
+               COALESCE((SELECT SUM(m.delta) FROM stock_movements m
+                         WHERE m.tenant_id=p.tenant_id AND m.unit_id=$2 AND m.ean=p.ean),0)::float8 AS stock_qty,
+               COALESCE(s.min_stock,p.min_stock) AS min_stock,
+               COALESCE(s.active,p.active) AS active,
+               p.image_data_url AS image_url,
+               GREATEST(p.updated_at,
+                        COALESCE(s.updated_at,p.updated_at),
+                        COALESCE((SELECT MAX(m2.received_at) FROM stock_movements m2
+                                  WHERE m2.tenant_id=p.tenant_id AND m2.unit_id=$2 AND m2.ean=p.ean),p.updated_at)) AS updated_at
+        FROM products p
+        LEFT JOIN product_unit_settings s
+               ON s.tenant_id=p.tenant_id AND s.unit_id=$2 AND s.ean=p.ean
+        WHERE p.tenant_id=$1
+          AND ($3::bigint IS NULL OR GREATEST(
+                p.updated_at,
+                COALESCE(s.updated_at,p.updated_at),
+                COALESCE((SELECT MAX(m3.received_at) FROM stock_movements m3
+                          WHERE m3.tenant_id=p.tenant_id AND m3.unit_id=$2 AND m3.ean=p.ean),p.updated_at)
+              ) > to_timestamp(($3::bigint)::float8 / 1000))
+        ORDER BY GREATEST(
+                p.updated_at,
+                COALESCE(s.updated_at,p.updated_at),
+                COALESCE((SELECT MAX(m4.received_at) FROM stock_movements m4
+                          WHERE m4.tenant_id=p.tenant_id AND m4.unit_id=$2 AND m4.ean=p.ean),p.updated_at)
+              ), p.ean
+        LIMIT $4";
+    let rows = sqlx::query_as::<_, ProductOut>(sql)
+        .bind(auth.tenant_id)
+        .bind(auth.unit_id)
+        .bind(query.since)
+        .bind(query.limit.unwrap_or(1000).clamp(1, 5000))
+        .fetch_all(&state.db)
+        .await
+        .map_err(internal)?;
     Ok(Json(rows))
 }
 
