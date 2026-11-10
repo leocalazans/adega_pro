@@ -3105,20 +3105,38 @@ async fn sales_by_unit(
     Ok(Json(rows))
 }
 
+/// Divide um script SQL em comandos individuais para que uma falha não
+/// desfaça os comandos anteriores (o protocolo simples do Postgres executa
+/// múltiplos statements em uma transação implícita).
+fn sql_statements(script: &str) -> Vec<&str> {
+    script
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| {
+            !statement.is_empty()
+                && statement.lines().any(|line| {
+                    let line = line.trim();
+                    !line.is_empty() && !line.starts_with("--")
+                })
+        })
+        .collect()
+}
+
 /// Compatibilidade de schema: enquanto as migrations rodam manualmente no
-/// Supabase, aplica a 0018 na inicialização caso as colunas ainda não existam.
-/// É idempotente (IF NOT EXISTS) e não falha o boot se o banco estiver incompleto.
+/// Supabase, aplica as pendentes (0015–0018) na inicialização. Cada comando é
+/// idempotente e executado isoladamente; falhas são registradas sem impedir o
+/// boot quando o banco já está parcialmente migrado.
 async fn ensure_identity_schema(pool: &PgPool) {
     let ready = sqlx::query_scalar::<_, bool>(
         "SELECT
-            (SELECT count(*) FROM information_schema.columns WHERE table_name='tenants' AND column_name='slug') > 0
-            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_subscriptions' AND column_name='billing_mode') > 0
-            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_subscriptions' AND column_name='courtesy_until') > 0
-            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_subscriptions' AND column_name='courtesy_note') > 0
-            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_users' AND column_name='display_name') > 0
-            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_users' AND column_name='source') > 0
-            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_users' AND column_name='revoked_at') > 0
-            AND (SELECT count(*) FROM information_schema.columns WHERE table_name='tenant_users' AND column_name='updated_at') > 0",
+            (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenants' AND column_name='slug') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenant_subscriptions' AND column_name='billing_mode') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenant_subscriptions' AND column_name='courtesy_until') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenant_subscriptions' AND column_name='courtesy_note') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenant_users' AND column_name='display_name') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenant_users' AND column_name='source') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenant_users' AND column_name='revoked_at') > 0
+            AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='tenant_users' AND column_name='updated_at') > 0",
     )
     .fetch_one(pool)
     .await
@@ -3126,12 +3144,33 @@ async fn ensure_identity_schema(pool: &PgPool) {
     if ready {
         return;
     }
-    warn!("schema de identidade/cortesia ausente; aplicando 0018 na inicialização");
-    if let Err(error) = sqlx::raw_sql(include_str!("../migrations/0018_courtesy_identity.sql"))
-        .execute(pool)
-        .await
-    {
-        warn!("não foi possível aplicar 0018 automaticamente: {error}. Aplique manualmente no Supabase.");
+    warn!("schema de identidade/cortesia ausente; aplicando migrations pendentes na inicialização");
+    for (version, script) in [
+        (
+            "0015_tenant_users",
+            include_str!("../migrations/0015_tenant_users.sql"),
+        ),
+        (
+            "0016_login_rate_limit",
+            include_str!("../migrations/0016_login_rate_limit.sql"),
+        ),
+        (
+            "0017_tenant_branding_color",
+            include_str!("../migrations/0017_tenant_branding_color.sql"),
+        ),
+        (
+            "0018_courtesy_identity",
+            include_str!("../migrations/0018_courtesy_identity.sql"),
+        ),
+    ] {
+        for statement in sql_statements(script) {
+            if let Err(error) = sqlx::raw_sql(statement).execute(pool).await {
+                warn!(
+                    "migration {version} falhou em [{}]: {error}",
+                    statement.chars().take(90).collect::<String>()
+                );
+            }
+        }
     }
 }
 
@@ -3166,15 +3205,30 @@ async fn bootstrap(pool: &PgPool) -> Result<(), sqlx::Error> {
     let key = env::var("BOOTSTRAP_TERMINAL_KEY").unwrap_or_else(|_| "commercectrl-dev-key".into());
     let owner_key =
         env::var("BOOTSTRAP_OWNER_KEY").unwrap_or_else(|_| "commercectrl-owner-dev-key".into());
+    let has_slug = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tenants' AND column_name='slug')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
     let mut tx = pool.begin().await?;
     let tenant_name =
         env::var("BOOTSTRAP_TENANT_NAME").unwrap_or_else(|_| "Mercadinho Martins".into());
-    sqlx::query("INSERT INTO tenants(id,name,slug) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET name=excluded.name,slug=COALESCE(tenants.slug,excluded.slug)")
-        .bind(tenant_id)
-        .bind(&tenant_name)
-        .bind(slugify(&tenant_name))
-        .execute(&mut *tx)
-        .await?;
+    if has_slug {
+        sqlx::query("INSERT INTO tenants(id,name,slug) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET name=excluded.name,slug=COALESCE(tenants.slug,excluded.slug)")
+            .bind(tenant_id)
+            .bind(&tenant_name)
+            .bind(slugify(&tenant_name))
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        warn!("coluna tenants.slug ausente; bootstrap seguirá sem slug até a 0018 ser aplicada");
+        sqlx::query("INSERT INTO tenants(id,name) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET name=excluded.name")
+            .bind(tenant_id)
+            .bind(&tenant_name)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("INSERT INTO tenant_subscriptions(tenant_id,plan,status,trial_ends_at,current_period_ends_at) VALUES($1,'profissional','trial',now()+interval '3 months',now()+interval '3 months') ON CONFLICT(tenant_id) DO NOTHING")
         .bind(tenant_id)
         .execute(&mut *tx)
