@@ -1218,11 +1218,13 @@ async fn count_recent_failed_attempts(
 }
 
 async fn platform_login(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<PlatformLoginRequest>,
 ) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let email = request.email.trim().to_lowercase();
-    let ip = "0.0.0.0".to_string();
+    let ip = client_ip(&headers, addr);
     if email.is_empty() || request.password.len() < 8 {
         let _ = record_login_attempt(&state, &email, &ip, false, None).await;
         return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
@@ -1308,10 +1310,11 @@ async fn platform_me(auth: PlatformAuth) -> Json<Value> {
 async fn tenant_login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<TenantLoginRequest>,
 ) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let email = request.email.trim().to_lowercase();
-    let ip = addr.ip().to_string();
+    let ip = client_ip(&headers, addr);
     if email.is_empty() || request.password.len() < 6 {
         let _ = record_login_attempt(&state, &email, &ip, false, None).await;
         return Err(error(StatusCode::UNAUTHORIZED, "credenciais inválidas"));
