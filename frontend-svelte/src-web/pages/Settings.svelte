@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { ImageUp } from "@lucide/svelte";
   import { cloudOwnerBranding, cloudSaveOwnerBranding } from "../lib/tauri.web";
   import type { TenantBranding } from "../../src-shared/types";

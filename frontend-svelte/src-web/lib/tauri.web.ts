@@ -147,17 +147,16 @@ export async function dashboardSummary(): Promise<any> {
 }
 
 export async function salesReport(from: number, to: number, paymentMethod?: string, terminalId?: string, productQuery?: string): Promise<any> {
-  return apiFetch("/api/v1/reports/sales-by-unit", {
-    method: "POST",
-    body: JSON.stringify({ from, to, paymentMethod, terminalId, productQuery }),
-  });
+  const params = new URLSearchParams({ from: String(from), to: String(to) });
+  if (paymentMethod?.trim()) params.set("payment_method", paymentMethod.trim());
+  if (terminalId?.trim()) params.set("terminal_id", terminalId.trim());
+  if (productQuery?.trim()) params.set("product_query", productQuery.trim());
+  return apiFetch(`/api/v1/reports/sales?${params.toString()}`);
 }
 
 export async function cloudOwnerOverview(from: number, to: number): Promise<any> {
-  return apiFetch("/api/v1/owner/overview", {
-    method: "POST",
-    body: JSON.stringify({ from, to }),
-  });
+  const params = new URLSearchParams({ from: String(from), to: String(to) });
+  return apiFetch(`/api/v1/owner/overview?${params.toString()}`);
 }
 
 export interface PlatformTenantCreateRequest {

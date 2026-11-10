@@ -48,6 +48,14 @@ struct OwnerAuth {
     tenant_id: Uuid,
 }
 
+/// Autenticação do painel do lojista: aceita a owner key (PDV desktop) ou a
+/// sessão web do usuário do tenant. Mantém as duas superfícies no mesmo
+/// conjunto de rotas e permite aplicar a regra de somente leitura.
+#[derive(Debug, Clone)]
+struct PanelAuth {
+    tenant_id: Uuid,
+}
+
 #[derive(Debug, Clone)]
 struct PlatformAuth {
     admin_id: Uuid,
@@ -352,6 +360,39 @@ struct OwnerOverviewOut {
     top_products: Vec<OwnerTopProductOut>,
 }
 
+#[derive(Debug, Serialize)]
+struct DashboardSummaryOut {
+    sales_today_brl_cents: i64,
+    items_today: i64,
+    new_customers_today: i64,
+    low_stock_count: i64,
+    daily_sales: Vec<i64>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct WebSalesRow {
+    uuid: String,
+    total_brl_cents: i64,
+    payment_method: String,
+    terminal_id: String,
+    items_count: i64,
+    created_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebReportsQuery {
+    #[serde(default)]
+    from: Option<i64>,
+    #[serde(default)]
+    to: Option<i64>,
+    #[serde(default)]
+    payment_method: Option<String>,
+    #[serde(default)]
+    terminal_id: Option<String>,
+    #[serde(default)]
+    product_query: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct UnitProductSettingRequest {
     unit_id: Uuid,
@@ -406,8 +447,11 @@ struct TenantBranding {
 
 #[derive(Debug, Deserialize)]
 struct TenantBrandingInput {
+    #[serde(alias = "displayName")]
     display_name: String,
+    #[serde(alias = "logoDataUrl")]
     logo_data_url: Option<String>,
+    #[serde(alias = "primaryColor")]
     primary_color: Option<String>,
 }
 
@@ -1043,6 +1087,18 @@ impl FromRequestParts<Arc<AppState>> for PlatformAuth {
     }
 }
 
+/// Assinatura em dia (trial/cortesia/paga e período vigente). Quando falsa, o
+/// painel continua acessível para leitura, mas qualquer escrita retorna 402.
+async fn subscription_writable(pool: &PgPool, tenant_id: Uuid) -> Result<bool, ApiError> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM tenant_subscriptions WHERE tenant_id=$1 AND status IN ('trial','active') AND (current_period_ends_at IS NULL OR current_period_ends_at>now()))",
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .map_err(internal)
+}
+
 impl FromRequestParts<Arc<AppState>> for TenantAuth {
     type Rejection = ApiError;
 
@@ -1060,14 +1116,7 @@ impl FromRequestParts<Arc<AppState>> for TenantAuth {
         .map_err(internal)?
         .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sessão de usuário expirada"))?;
         // Assinatura vencida/revogada: login permitido, mas somente leitura.
-        let writable = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM tenant_subscriptions WHERE tenant_id=$1 AND status IN ('trial','active') AND (current_period_ends_at IS NULL OR current_period_ends_at>now()))",
-        )
-        .bind(row.1)
-        .fetch_one(&state.db)
-        .await
-        .map_err(internal)?;
-        if !writable
+        if !subscription_writable(&state.db, row.1).await?
             && !parts.uri.path().starts_with("/api/v1/auth/")
             && !matches!(
                 parts.method,
@@ -2451,6 +2500,18 @@ impl FromRequestParts<Arc<AppState>> for OwnerAuth {
                 "proprietário não autorizado",
             ));
         }
+        // Mesma regra do painel web: assinatura vencida/revogada mantém a
+        // leitura (GET/HEAD/OPTIONS) e bloqueia escritas com 402.
+        if !matches!(
+            parts.method,
+            axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+        ) && !subscription_writable(&state.db, tenant_id).await?
+        {
+            return Err(error(
+                StatusCode::PAYMENT_REQUIRED,
+                "assinatura vencida: acesso somente leitura",
+            ));
+        }
         let _ = sqlx::query(
             "UPDATE tenant_admins SET last_seen_at=now() WHERE tenant_id=$1 AND api_key_hash=$2",
         )
@@ -2459,6 +2520,35 @@ impl FromRequestParts<Arc<AppState>> for OwnerAuth {
         .execute(&state.db)
         .await;
         Ok(Self { tenant_id })
+    }
+}
+
+impl FromRequestParts<Arc<AppState>> for PanelAuth {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        // Desktop: credencial de proprietário por header.
+        if parts.headers.contains_key("x-owner-key") {
+            let auth = OwnerAuth::from_request_parts(parts, state).await?;
+            return Ok(Self {
+                tenant_id: auth.tenant_id,
+            });
+        }
+        // Web: sessão do usuário do tenant. O bloqueio de escrita por assinatura
+        // vencida é aplicado dentro do TenantAuth.
+        let auth = TenantAuth::from_request_parts(parts, state).await?;
+        if !matches!(auth.role.as_str(), "owner" | "admin" | "manager") {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                "perfil sem acesso ao painel do lojista",
+            ));
+        }
+        Ok(Self {
+            tenant_id: auth.tenant_id,
+        })
     }
 }
 
@@ -2768,9 +2858,131 @@ async fn products(
     Ok(Json(rows))
 }
 
+async fn dashboard_summary(
+    State(state): State<Arc<AppState>>,
+    auth: PanelAuth,
+) -> Result<Json<DashboardSummaryOut>, ApiError> {
+    let today = chrono::Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp();
+    let sales_today_brl_cents = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(total_brl_cents),0)::bigint FROM sales WHERE tenant_id=$1 AND client_created_at>=$2",
+    )
+    .bind(auth.tenant_id)
+    .bind(today)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    let items_today = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(si.qty),0)::bigint FROM sale_items si JOIN sales s ON s.tenant_id=si.tenant_id AND s.uuid=si.sale_uuid WHERE s.tenant_id=$1 AND s.client_created_at>=$2",
+    )
+    .bind(auth.tenant_id)
+    .bind(today)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    let new_customers_today = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::bigint FROM operational_records WHERE tenant_id=$1 AND entity IN ('customer','customers') AND updated_at>=to_timestamp($2::float8)",
+    )
+    .bind(auth.tenant_id)
+    .bind(today)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    let low_stock_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::bigint FROM (
+            SELECT u.id,p.ean FROM units u
+            JOIN products p ON p.tenant_id=u.tenant_id
+            LEFT JOIN product_unit_settings ps ON ps.tenant_id=p.tenant_id AND ps.unit_id=u.id AND ps.ean=p.ean
+            LEFT JOIN (SELECT tenant_id,unit_id,ean,SUM(delta) qty FROM stock_movements GROUP BY 1,2,3) sm
+                ON sm.tenant_id=p.tenant_id AND sm.unit_id=u.id AND sm.ean=p.ean
+            WHERE u.tenant_id=$1 AND COALESCE(ps.active,p.active)
+              AND COALESCE(sm.qty,0) < COALESCE(ps.min_stock,p.min_stock)
+        ) low_stock",
+    )
+    .bind(auth.tenant_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    let daily = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT ((client_created_at-$2)/86400)::bigint AS day,COALESCE(SUM(total_brl_cents),0)::bigint FROM sales WHERE tenant_id=$1 AND client_created_at>=$2 GROUP BY 1",
+    )
+    .bind(auth.tenant_id)
+    .bind(today)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    let mut daily_sales = vec![0i64; 7];
+    for (day, total) in daily {
+        if (0..7).contains(&day) {
+            daily_sales[day as usize] = total;
+        }
+    }
+    // Índice 0 = hoje; o painel exibe do mais antigo para o mais recente.
+    daily_sales.reverse();
+    Ok(Json(DashboardSummaryOut {
+        sales_today_brl_cents,
+        items_today,
+        new_customers_today,
+        low_stock_count,
+        daily_sales,
+    }))
+}
+
+async fn tenant_sales_report(
+    State(state): State<Arc<AppState>>,
+    auth: PanelAuth,
+    Query(query): Query<WebReportsQuery>,
+) -> Result<Json<Vec<WebSalesRow>>, ApiError> {
+    let from = query.from.unwrap_or(0);
+    let to = query.to.unwrap_or(i64::MAX);
+    if from > to {
+        return Err(error(StatusCode::BAD_REQUEST, "período inválido"));
+    }
+    let payment = query
+        .payment_method
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let terminal = query
+        .terminal_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let product = query
+        .product_query
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let rows = sqlx::query_as::<_, WebSalesRow>(
+        "SELECT s.uuid::text uuid,s.total_brl_cents,s.payment_method,s.terminal_id::text terminal_id,
+                (SELECT COUNT(*) FROM sale_items si WHERE si.tenant_id=s.tenant_id AND si.sale_uuid=s.uuid)::bigint items_count,
+                s.client_created_at created_at
+         FROM sales s
+         WHERE s.tenant_id=$1 AND s.client_created_at>=$2 AND s.client_created_at<$3
+           AND ($4::text IS NULL OR s.payment_method=$4)
+           AND ($5::text IS NULL OR s.terminal_id::text=$5)
+           AND ($6::text IS NULL OR EXISTS(SELECT 1 FROM sale_items si WHERE si.tenant_id=s.tenant_id AND si.sale_uuid=s.uuid AND si.ean ILIKE '%'||$6||'%'))
+         ORDER BY s.client_created_at DESC LIMIT 5000",
+    )
+    .bind(auth.tenant_id)
+    .bind(from)
+    .bind(to)
+    .bind(payment)
+    .bind(terminal)
+    .bind(product)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(rows))
+}
+
 async fn owner_overview(
     State(state): State<Arc<AppState>>,
-    auth: OwnerAuth,
+    auth: PanelAuth,
     Query(query): Query<ReportsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let from = query.from.unwrap_or(0).max(0);
@@ -2994,7 +3206,7 @@ async fn online_tv_page(
 
 async fn owner_branding(
     State(state): State<Arc<AppState>>,
-    auth: OwnerAuth,
+    auth: PanelAuth,
 ) -> Result<Json<TenantBranding>, ApiError> {
     let branding = sqlx::query_as::<_, TenantBranding>(
         "SELECT display_name,logo_data_url,primary_color FROM tenant_branding WHERE tenant_id=$1",
@@ -3024,7 +3236,7 @@ async fn owner_branding(
 
 async fn save_owner_branding(
     State(state): State<Arc<AppState>>,
-    auth: OwnerAuth,
+    auth: PanelAuth,
     Json(input): Json<TenantBrandingInput>,
 ) -> Result<Json<TenantBranding>, ApiError> {
     let name = input.display_name.trim();
@@ -3433,6 +3645,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(desktop_update),
         )
         .route("/api/v1/reports/sales-by-unit", get(sales_by_unit))
+        .route("/api/v1/reports/sales", get(tenant_sales_report))
+        .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/api/v1/owner/overview", get(owner_overview))
         .route(
             "/api/v1/owner/product-settings",
@@ -3445,7 +3659,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/api/v1/owner/branding",
-            get(owner_branding).put(save_owner_branding),
+            get(owner_branding)
+                .put(save_owner_branding)
+                .post(save_owner_branding),
         )
         .route(
             "/api/v1/display/{token}/promotions",
